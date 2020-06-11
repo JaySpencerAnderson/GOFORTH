@@ -33,7 +33,9 @@ arrows and buttons), in 3 sections
 - The middle section allows one to choose a defined word.  If the Forth script defines a new word, it will show up here as soon as the script is executed.
 - In the upper right hand corner is a facility for entering integers.
 The remainder of the screen displays the program.
+
 *Words*
+
 - A number in the program will get pushed to the data stack.
 - QUOTE followed by alpha or special characters will place the numeric (Base 40) equivalent
   of the characters on the data stack.  This can then be used by certain commands like EMIT,
