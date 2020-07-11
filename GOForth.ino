@@ -12,67 +12,13 @@
 //   - returnStack
 // - If function
 // 
-// Next:
-// done: Pass filename to read/write file
-// 4/22/2020 done: Break (B & A), PLIST (directory command)
-//   Break button to interrupt programExecute
-// 4/23/2020 done: Commented Serial.print inside programExecute, about 60x faster (!)
-//                 Added TIME word that inserts millisecond time into stack
-//                 Added error check for CMDPUSH following QUOTE
-//                 Sped up things by getting rid of debounce on input.
-//                 Now writing screen only when key is depressed, not when released
-//                 Wrote STACK method which treats the stack as an array.  Probably will
-//                  change.  I'm trying to write a SIEVE program using this.
-//  Decided not to: Implement autorepeat.  That part works but then I'd have to add
-//   redisplaying the screen with the new field highlighted.
-// 5/2/2020 done: Bottom area is used by 0 to 1 input methods, not 3.  Need to iron out wrinkles.
-// FIXED: INPUTSTATEMENU still doesn't erase entire area if program stack would extend beneath it.
-// -  programStack should auto scroll so selected word (or last word) is visible.
-// -  dataStack should have a limited size - 2 rows
-// -  Don't have a plan for variables to be visible (debugging).  Maybe swap with dataStack.
-// -  Don't have much of a plan for output screen/graphics
-// FIXED: rewriting screen is flashing because I always erase and rewrite screen.  Would be nice if
-//    things only get rewritten (or at least erased) if necessary.  Now not flashing.
-// 5/3/2020
-// FIXED: Try PLIST (execute).  Delete (cut) PLIST.  Not erased but rewritten.
-// 5/7/2020
-//   Up down arrows in CLEAR?
-//   Additional commands: INVERT (not) VARIABLE ! (store in variable) @ (fetch from variable)
-//                        +! CONSTANT ALLOT
-//   VARIABLES/ARRAYS     VARIABLE ! @ CONSTANT +! ALLOT ?
-//   I/O                  . EMIT CR ? KEY
-//   ! @ not in base 40.  Use something like -> <- NOTE: Using GET (index - value), PUT (index, value - )
-//   VARIABLE, CONSTANT are longer than 6 chars.  Use Javascript VAR and CONST
-// 5/24/2020 - DONE: Faster looping, hash lookup
-// 5/25/2020 - TODO:
-//  DONE - BEGIN, UNTIL/AGAIN - use loopStack
-//  DONE - Have show get words from CmdLookup
-//  DONE - Fix bug(s) with delete
-//    FIXED - DELETING first word, last one doesn't disappear.
-//  - Create ERROR variable and exit programExecute when there is an error (stack overflow, underflow)
+// To Do:
+// 3) PREAD doesn't work after program download.  Have to cycle power, then it works.  Maybe not fixable.
+// 4) Sometimes left arrow doesn't move to select next (visibly), then left again skips it.
+// - Can't get "Quote Number" error to show.
 //  - HASH (4 bit) lookup for user defined words
-//  DONE - Make A+START clear program.
-//   BUG - The above doesn't clear the screen properly but the next keystroke usually does.
-// 5/30/2020 !!!!
-// - Implemented DAC. Karplus Strong Demo implemented!  I didn't think it was fast enough!
-// - Demo initializes 15 words of array with 1,0,0,1,1,1,0,0,0,0,1,1,1,1,1
-//   using 15 byte initializes works.  Use 21- it's distorted.
-//   So it is limited but does produce result. 
-//   Hard-coded square or triangle wave actually can hit a high pitch.
-//   So a little more optimization would be useful.
-// 5/31/2020
-// - Much faster after disabling GO.Update in programExecute.  Just can't break out now.
-//   Also seems to cause a problem with reading programs.
-//   Perhaps make this configurable (FASTER, SLOWER)
-// Future
-//  - Implement scripted Karplus Strong, to 10 khz?
-//    - requires UDELAY - delay to next multiple of usec (50 in this case)
 //  - Implement scripted analog computer
 //    - requires graphics, text output, input
-//  - Show errors somehow
-//  - F1 HELP
-//  - Get PSAVE, PREAD reliable (FACT changes not getting saved)
-//  - Decide on standard or C like operators (XOR), at least consistent
 //
 // Scrollable data, program, variable area
 //
@@ -84,14 +30,16 @@
 //
 uint16_t tk, pk, slower;
 uint32_t globalerror;
-char *globalmessage;
+const char *globalmessage;
 
 #define TRUE -1
 #define FALSE 0
 #define DEBUG 0
 
-#define ERRORNONE 0
+#define ERRORNONE NULL
 #define ERRORUNDERFLOW 1
+#define ERROROVERFLOW 2
+#define ERRORQUOTENUMBER 3
 
 #define SELECTEDCOLOR 0x07FE
 #define NORMALCOLOR WHITE
@@ -135,6 +83,7 @@ char Base10[]="0123456789-";
 #define COLUMNS 26
 #define ANCOLS 8
 #define ANROWS 5
+#define MENUROWS 5
 #define BASE40ROW 10
 #define BASE40COL 8
 
@@ -152,7 +101,7 @@ typedef struct {
 } HashEntry;
 typedef struct {
   GFU cmd;
-  char *msg;
+  const char *msg;
 } HelpEntry;
 
 // Convert from a base 40 encoding back to ascii
@@ -166,6 +115,26 @@ void fromBase40(char *buffer,uint32_t b40){
     buffer[0]=Base40[b40%BASE];
     b40/=BASE;
   }
+}
+
+void globalError(int error){
+  switch(error){
+    case ERRORNONE:
+      globalmessage=NULL;
+      break;
+    case ERRORUNDERFLOW:
+      globalmessage="Stack Underflow";
+      break;
+    case ERROROVERFLOW:
+      globalmessage="Stack Overflow";
+      break;
+    case ERRORQUOTENUMBER:
+      globalmessage="Quote Number";
+      break;
+    default:
+      break;
+  }
+  return;
 }
 
 class HashLookup {
@@ -188,35 +157,24 @@ class HashLookup {
       uint32_t y=x^(x>>8);
       return 0xFF&(y^(y>>16));
     }
-    char *getHelpMessage(GFU fname){
-      Serial.print("search for message for ");
+    const char *getHelpMessage(GFU fname){
       char xyz[13];
       fromBase40(xyz,fname);
-      Serial.println(xyz);
       for(int i=0;i<64;i++){
         if(fname == helpLookup[i].cmd){
-          Serial.print("Found it:");
-          Serial.println(helpLookup[i].msg);
           return helpLookup[i].msg;
         }
       }
-      Serial.println(":-(");
       return NULL;
     }
-    void addEntry(void (*fptr)(), GFU fname, char *msg){
+    void addEntry(void (*fptr)(), GFU fname, const char *msg){
       char xyz[13];
       fromBase40(xyz,fname);
 
-      Serial.print("Adding ");
-      Serial.println(xyz);
       for(int i=0;i<64;i++){
         if(helpLookup[i].cmd == fname || helpLookup[i].cmd == 0){
           helpLookup[i].cmd=fname;
           helpLookup[i].msg=msg;
-          Serial.print("Added ");
-          Serial.print(helpLookup[i].msg);
-          Serial.print(" @ ");
-          Serial.println(i);
           break;
         }
       }
@@ -332,7 +290,7 @@ int isBase40(char *s){
   return true;
 }
 // Convert a string toBase40 encoding
-uint32_t toBase40(char *txt){
+uint32_t toBase40(const char *txt){
   uint32_t sum=0;
   int i=0;
   while(txt[i] != 0){
@@ -467,16 +425,59 @@ public:
     n=0;
   }
   void put8(uint32_t i, uint8_t b){
-    u.b[i]=b;
+    if(i < 0){
+      globalError(ERRORUNDERFLOW);
+    }
+    else if(i >= HEAPLIMITB){
+      globalError(ERROROVERFLOW);
+    }
+    else {
+      u.b[i]=b;
+    }
   }
   void put32(uint32_t i, Word w){
-    u.w[i].u=w.u;
+    if(i < 0){
+      globalError(ERRORUNDERFLOW);
+    }
+    else if(i >= HEAPLIMITW){
+      globalError(ERROROVERFLOW);
+    }
+    else {
+      u.w[i].u=w.u;
+    }
   }
   uint8_t get8(uint32_t i){
-    return u.b[i];
+    uint8_t x;
+    if(i < 0){
+      globalError(ERRORUNDERFLOW);
+      x=0;
+      return x;
+    }
+    else if(i >= HEAPLIMITB){
+      globalError(ERROROVERFLOW);
+      x=0;
+      return x;
+    }
+    else {
+      return u.b[i];
+    }
   }
   Word get32(uint32_t i){
-    return u.w[i];
+    Word x;
+
+    if(i < 0){
+      globalError(ERRORUNDERFLOW);
+      x.u=0;
+      return x;
+    }
+    else if(i >= HEAPLIMITW){
+      globalError(ERROROVERFLOW);
+      x.u=0;
+      return x;
+    }
+    else {
+      return u.w[i];
+    }
   }
 } heap;
 class NameStack {
@@ -545,22 +546,29 @@ class NameStack {
     Word getSelected(){
       return Menu[nMenuSelected];
     }
+    uint32_t sortValue(uint32_t value){
+      while(value < 102400000){
+        value *= 40;
+      }
+      return value;
+    }
     void push(uint32_t value){
       char bfr[16];
       fromBase40(bfr,value);
+      uint32_t sv=sortValue(value);
       if(nMenu == 0){
         Menu[nMenu++].u=value;
       }
-      else if(value < Menu[nMenu-1].u){
+      else if(sv > sortValue(Menu[nMenu-1].u)){
         Menu[nMenu++].u=value;
       }
-      else if(value > Menu[0].u){
+      else if(sv < sortValue(Menu[0].u)){
         makeGapAt(0);
         Menu[0].u=value;
       }
       else {
         for(int i=0;i<nMenu-1;i++){
-          if(value < Menu[i].u && value > Menu[i+1].u){
+          if(sv > sortValue(Menu[i].u) && sv < sortValue(Menu[i+1].u)){
             makeGapAt(i+1);
             Menu[i+1].u=value;
             return;
@@ -576,6 +584,7 @@ class NameStack {
       else {
         return;
       }
+      // First of all, build the menu from scratch (including user-defined words)
       nMenu=0;
       GFU cmd=0;
       while((cmd=CmdLookup.getNextEntry(cmd)) != 0){
@@ -588,45 +597,60 @@ class NameStack {
         push(definedWord[j].word);
       }
       nMenuSelected%=nMenu;
-      int notShown=1;
-      while(notShown){
-        RowCol next={ROWS-5-nMenuOffset,0};
-        for(int j=0;j<nMenu;j++){
-          int size=lengthBase40(Menu[j].u);
-          if(next.col+size > COLUMNS){
-            next.row++;
-            next.col=0;
+      // Done
+      // First pass - set nMenuOffset
+      int col,row;
+      col=row=0;
+      for(int j=0;j<nMenu;j++){
+        int size=lengthBase40(Menu[j].u);
+        if(col+size > COLUMNS){
+          row++;
+          col=0;
+        }
+
+        if(nMenuSelected == j){
+          if(0 > row-nMenuOffset){
+            nMenuOffset=row;
           }
-          if(next.row >= ROWS-5 && next.row < ROWS){
-            if(nMenuSelected == j){
-              GO.lcd.setTextColor(NORMALBGCOLOR,color);
-              notShown=0;
-            }
-            else {
-              GO.lcd.setTextColor(color,NORMALBGCOLOR);
-            }
-            GO.lcd.setCharCursor(next.col, next.row);
-            char bfr[7];
-            fromBase40(bfr,Menu[j].u);
-            GO.lcd.printf("%s",bfr);
+          else if(row-nMenuOffset >= MENUROWS){
+            nMenuOffset=row-MENUROWS+1;
+          }
+          break;
+        }
+        col+=size+1;
+      }
+      // Second pass - show words
+      col=0;
+      row=0-nMenuOffset;
+      for(int j=0;j<nMenu;j++){
+        int screenRow=row+ROWS-MENUROWS;
+        int size=lengthBase40(Menu[j].u);
+        if(col+size > COLUMNS || (j+1) == nMenu){
+          if(0 <= row && row < MENUROWS){
+            eraseSpace(screenRow,col,COLUMNS-col);
+          }
+          row++;
+          screenRow=row+ROWS-MENUROWS;
+          col=0;
+        }
+        if(0 <= row && row < MENUROWS){
+          if(nMenuSelected == j){
+            GO.lcd.setTextColor(NORMALBGCOLOR,color);
           }
           else {
-            if(nMenuSelected == j){
-              if(next.row >= ROWS){
-                nMenuOffset+=next.row-ROWS+1;
-              }
-              else if(next.row < ROWS-5){
-                nMenuOffset--;
-              }
-              for(int i=ROWS-5;i<ROWS;i++){
-                eraseSpace(i,0,COLUMNS);
-              }
-              break;
-            }            
+            GO.lcd.setTextColor(color,NORMALBGCOLOR);
           }
-          next.col+=size+1;
+          GO.lcd.setCharCursor(col, screenRow);
+          char bfr[7];
+          fromBase40(bfr,Menu[j].u);
+          GO.lcd.printf("%s",bfr);
+          if(col+size+1 < COLUMNS){
+            eraseSpace(screenRow,col+size,1);
+          }
         }
+        col+=size+1;
       }
+
       return;
     }
 } menuStack;
@@ -661,16 +685,14 @@ class DataStack {
         value[nws++]=w;
       }
       else {
-        globalmessage="Stack Overflow";
-        globalerror=1;
+        globalError(ERROROVERFLOW);
       }
     };
     Word pop(){
       if(nws > 0){
         return value[--nws];
       }
-      globalmessage="Stack Underflow";
-      globalerror=1;
+      globalError(ERRORUNDERFLOW);
       Word x;
       x.i=0;
       return x;
@@ -715,24 +737,34 @@ class DataStack {
       }
     }
 // Display data stack starting on the given line.
-    int show(int line){
-      int column=0,size,localCount=0;
-      uint16_t color=NORMALCOLOR;
-
-      GO.lcd.setTextColor(color,NORMALBGCOLOR);
-      erase(line);
+    void show(){
+      int offset,size,column,line;
+      column=line=0;
       for(int i=0;i<nws;i++){
         size=lenInt(value[i].i);
         if(column + size > COLUMNS){
           column=0;
           line++;
-          erase(line);
         }
-        GO.lcd.setCharCursor(column, line);
         column += size+1;
-        GO.lcd.printf("%d",value[i].i);
       }
-      return line;
+      offset=(line<2)?0:(line-1);
+      GO.lcd.setTextColor(NORMALCOLOR,NORMALBGCOLOR);
+      erase(0);
+      erase(1);
+      column=line=0;
+      for(int i=0;i<nws;i++){
+        size=lenInt(value[i].i);
+        if(column + size > COLUMNS){
+          column=0;
+          line++;
+        }
+        if((line-offset) >= 0){
+          GO.lcd.setCharCursor(column, line-offset);
+          GO.lcd.printf("%d",value[i].i);
+        }
+        column += size+1;
+      }
     }
 } dataStack, returnStack, loopStack;
 
@@ -767,12 +799,7 @@ class TypeWordStack {
   public:
     TypeWordStack(){
       DataStack ds;
-#if 0
-      selected=-1;
-      lastLine=ntw=nOffset=0;
-#else
       init();
-#endif
     }
     void init(){
       selected=-1;
@@ -818,8 +845,7 @@ class TypeWordStack {
       else {
         tw.type.i=NOOP;
         tw.value.i=0;
-        globalmessage="Stack Underflow";
-        globalerror=ERRORUNDERFLOW;
+        globalError(ERRORUNDERFLOW);
       }
       return tw;
     }
@@ -929,6 +955,47 @@ class TypeWordStack {
       }
       setSelected(nxt);
     }
+
+    void nextLine(){
+      int size=0;
+      int nxt=getSelected()+1;
+      while(nxt < ntw){
+        TypeWord tw=get(nxt);
+        if(tw.type.i == CMDPUSH){
+          size+=(lenInt(tw.value.i) + 1);
+        }
+        else {
+          size+=(lenBase40(tw.type.u) + 1);
+        }
+        if(size >= COLUMNS){
+          setSelected(nxt);
+          return;
+        }
+        nxt++;
+      }
+      setSelected(0);
+    }
+    void previousLine(){
+      int size=0;
+      int nxt=getSelected()-1;
+      while(nxt > -1){
+        TypeWord tw=get(nxt);
+        if(tw.type.i == CMDPUSH){
+          size+=(lenInt(tw.value.i) + 1);
+        }
+        else {
+          size+=(lenBase40(tw.type.u) + 1);
+        }
+        if(size >= COLUMNS){
+          setSelected(nxt);
+          return;
+        }
+        nxt--;
+      }
+      setSelected(ntw-1);
+    }
+
+    
     int lenInt(int32_t i){
       int len=1;
       if(i < 0){
@@ -1089,84 +1156,86 @@ class TypeWordStack {
         Serial.println("Closed ");
       }
     }
-// Display a stack starting on the given line.
-// Emphasize the stack if non-zero
-    void show(int line, int is, int limitLine){
-    int row,column=0,size,notShown=1,above=0;
-    char ascii[16];
-    uint16_t color=(is == INPUTSTATECLEAR)?NORMALCOLOR:OTHERCOLOR;
+// Display a stack 
+    void show(int is, int limitLine){
+      uint16_t color=(is == INPUTSTATECLEAR)?NORMALCOLOR:OTHERCOLOR;
+      char ascii[16];
+      int size,changed=1,startLine=2;
 
-    if(ntw == 0){
-      eraseSpace(line,0,COLUMNS);
-    }
-    while(ntw > 0 && notShown){
-      row=line-nOffset;
-      GO.lcd.setTextColor(color,NORMALBGCOLOR);
-      for(int i=0;i<ntw;i++){
-        TypeWord tw=get(i);
-        if(tw.type.i == CMDPUSH){
-          size=lenInt(tw.value.i);
+      if(ntw == 0){
+        for(int i=startLine;i<limitLine;i++){
+          erase(i);
         }
-        else {
-          size=lenBase40(tw.type.u);
-        }
-        if(column + size > COLUMNS){
-          Serial.println("Should not happen");
-          // Erase to the end of this line
-          if(row >= line){
-            eraseSpace(row,column,COLUMNS-column);
-          }
-          column=0;
-          row++;
-          if(row >= limitLine){
-            break;
-          }
-        }
+        return;
+      }
+      // Don't change nOffset if nothing is selected
+      int startActual=0;
+      for(int actual=startActual;actual<2;actual++){
+        int screenLine=startLine-nOffset,line=startLine;
+        int column=0;
 
-        if(row >= line && row < limitLine){
-          // Erase the space after this next word
-          eraseSpace(row,column+size,1);
-          if(i == selected){
-            GO.lcd.setTextColor(NORMALBGCOLOR,color);
-          }
-          else {
-            GO.lcd.setTextColor(color,NORMALBGCOLOR);
-          }
-          if(i == selected){
-            notShown=0;
-          }
-          else if(selected == -1 && i == ntw-1){
-            notShown=0;
-          }
-          // Now write the word
-          GO.lcd.setCharCursor(column, row);
+        for(int i=0;i<ntw;i++){
+          // Figure out the size of the next word
+          TypeWord tw=get(i);
           if(tw.type.i == CMDPUSH){
-            GO.lcd.printf("%d",tw.value.i);
+            size=lenInt(tw.value.i);
           }
           else {
-            fromBase40(ascii,tw.type.u);
-            GO.lcd.printf("%s",ascii);
+            size=lenBase40(tw.type.u);
+          }
+          if(column + size > COLUMNS){
+            if(actual){
+              if(screenLine >= startLine && screenLine < limitLine){
+                eraseSpace(screenLine,column,COLUMNS-column);
+              }
+            }
+            line++;
+            screenLine++;
+            column=0;                        
+          }
+          if(actual){
+            if(screenLine >= startLine && screenLine < limitLine){
+              if(i == selected){
+                GO.lcd.setTextColor(NORMALBGCOLOR,color);
+              }
+              else {
+                GO.lcd.setTextColor(color,NORMALBGCOLOR);
+              }
+              GO.lcd.setCharCursor(column, screenLine);
+              if(tw.type.i == CMDPUSH){
+                GO.lcd.printf("%d",tw.value.i);
+              }
+              else {
+                fromBase40(ascii,tw.type.u);
+                GO.lcd.printf("%s",ascii);
+              }
+            }
+          }
+          else if(i == selected){
+            if(screenLine >= limitLine){
+              nOffset+=1+screenLine-limitLine;
+            }
+            else if(screenLine < startLine){
+              nOffset+=(screenLine-startLine);
+            }
+          }
+          column+=size;
+          if(actual){
+            if(screenLine >= startLine && screenLine < limitLine){
+              if(column <= COLUMNS){
+                eraseSpace(screenLine,column,1);              
+              }
+            }
+          }
+          column++;
+        }
+        for(int i=line-nOffset+1;i<limitLine;i++){
+          if(actual && (i-nOffset) >= startLine && (i-nOffset) < limitLine){
+            eraseLine(i);
           }
         }
-        else {
-          if(i == selected){
-            notShown=1;
-            above=(row<line)?1:0;
-          }
-        }
-        // Add one for space delimiter
-        column+=size+1;
-      }
-      eraseSpace(row,column,COLUMNS-column);
-      if(row+1 < limitLine){
-        eraseLine(row+1);
-      }
-      if(notShown){
-        nOffset=(above)?0:(nOffset+1);
       }
     }
-    GO.lcd.setTextColor(color,NORMALBGCOLOR);
-  }
 } programStack, cutStack;
 
 int32_t accumulator,increment;
@@ -1244,15 +1313,10 @@ void showAccumulator(int InputState){
   int16_t color;
   int accu=accumulator,incr=increment;
   if(InputState == INPUTSTATENUMERIC){
-    color=OTHERCOLOR;
     color=NORMALCOLOR;
   }
   else {
-#if 0
-    color=NORMALCOLOR;
-#else
     return;
-#endif
   }
   eraseSpace(ROWS-1,ATCOLUMN,size);
   char space=' ';
@@ -1478,7 +1542,15 @@ void cmdRctngl(){
   w=dataStack.pop();
   y=dataStack.pop();
   x=dataStack.pop();
-  GO.lcd.fillRect(x.i,y.i,w.i,h.i,c.i);
+  GO.lcd.fillRect(x.u,y.u,w.u,h.u,c.u);
+}
+void cmdCircle(){
+  Word x,y,r,c;
+  c=dataStack.pop();
+  r=dataStack.pop();
+  y=dataStack.pop();
+  x=dataStack.pop();
+  GO.lcd.fillCircle(x.u,y.u,r.u,c.u);
 }
 // CUrsor Position
 void cmdCup(){
@@ -1498,6 +1570,7 @@ void cmdEmit(){
 }
 void cmdEmitn(){
   Word a;
+  a=dataStack.pop();
   GO.lcd.printf("%d",a.i);
   GO.update();
 }
@@ -1596,6 +1669,36 @@ void cmdBlue(){
   a.i=BLUE;
   dataStack.push(a);
 }
+void cmdUp(){
+  Word a;
+  a.i=KPUP;
+  dataStack.push(a);  
+}
+void cmdDown(){
+  Word a;
+  a.i=KPDOWN;
+  dataStack.push(a);  
+}
+void cmdLeft(){
+  Word a;
+  a.i=KPLEFT;
+  dataStack.push(a);  
+}
+void cmdRight(){
+  Word a;
+  a.i=KPRIGHT;
+  dataStack.push(a);  
+}
+void cmdA(){
+  Word a;
+  a.i=KPA;
+  dataStack.push(a);  
+}
+void cmdB(){
+  Word a;
+  a.i=KPB;
+  dataStack.push(a);  
+}
 void cmdTime(){
   Word a;
   a.i=millis();
@@ -1608,10 +1711,11 @@ void cmdDac(){
 }
 void cmdQuote(){
   programStack.selectNext();
-  dataStack.push(programStack.copy().type);
-  if(dataStack.peek().i == CMDPUSH){
-    globalerror=1;
-    globalmessage="ERROR: Trying to quote a number";
+  if(programStack.get(programStack.getSelected()).type.i == CMDPUSH){
+    globalError(ERRORQUOTENUMBER);
+  }
+  else {
+    dataStack.push(programStack.copy().type);    
   }
 }
 void cmdAgain(){
@@ -1738,15 +1842,23 @@ void commandInit(){
   CmdLookup.addEntry(&cmdRed, toBase40("*RED"),   "(- value)");
   CmdLookup.addEntry(&cmdGreen,toBase40("*GREEN"),"(- value)");
   CmdLookup.addEntry(&cmdBlue, toBase40("*BLUE"), "(- value)");
+
+  CmdLookup.addEntry(&cmdUp, toBase40("*UP"), "(- value)");
+  CmdLookup.addEntry(&cmdDown, toBase40("*DOWN"), "(- value)");
+  CmdLookup.addEntry(&cmdLeft, toBase40("*LEFT"), "(- value)");
+  CmdLookup.addEntry(&cmdRight, toBase40("*RIGHT"), "(- value)");
+  CmdLookup.addEntry(&cmdA, toBase40("*A"), "(- value)");
+  CmdLookup.addEntry(&cmdB, toBase40("*B"), "(- value)");
+  
   CmdLookup.addEntry(&cmdTime, toBase40("TIME"),  "(- value)");
   CmdLookup.addEntry(&cmdDup, toBase40("DUP"),    "(r1 - r1 r1)");
   CmdLookup.addEntry(&cmdOver, toBase40("OVER"),  "(r1 r2 - r1 r2 r1)");
   CmdLookup.addEntry(&cmdRot, toBase40("ROT"),    "(r1 r2 r3 - r2 r3 r1)");
   CmdLookup.addEntry(&cmdSwap, toBase40("SWAP"),  "(r1 r2 - r2 r1)");
   CmdLookup.addEntry(&cmdSemicolon, toBase40(";"), "(-)");
-  CmdLookup.addEntry(&cmdPread, toBase40("PREAD"), "(r1 -)");
+  CmdLookup.addEntry(&cmdPread, toBase40("PREAD"), "(name -)");
   CmdLookup.addEntry(&cmdPlist, toBase40("PLIST"), "(-)");
-  CmdLookup.addEntry(&cmdPsave, toBase40("PSAVE"), "(r1 -)");
+  CmdLookup.addEntry(&cmdPsave, toBase40("PSAVE"), "(name -)");
   CmdLookup.addEntry(&cmdIf, toBase40("IF"), "(r1 -)");
   CmdLookup.addEntry(&cmdElse, toBase40("ELSE"), "(-)");
   CmdLookup.addEntry(&cmdNoop, toBase40("THEN"), "(-)");
@@ -1762,6 +1874,7 @@ void commandInit(){
   CmdLookup.addEntry(&cmdPinWrite, toBase40("PINWRI"), "(pin value -)");
   CmdLookup.addEntry(&cmdLoopVariable, toBase40("I"), "(- value)");
   CmdLookup.addEntry(&cmdRctngl, toBase40("RCTNGL"), "(x y wt ht color -)");
+  CmdLookup.addEntry(&cmdCircle, toBase40("CIRCLE"), "(x y radius color -)");
   CmdLookup.addEntry(&cmdCup, toBase40("CUP"),       "(row column -)");
   CmdLookup.addEntry(&cmdEmit, toBase40("EMIT"), "(r1 -)");
   CmdLookup.addEntry(&cmdButton, toBase40("BUTTON"), "(- value)");
@@ -1790,6 +1903,7 @@ int programScan(){
       lastQuote=true;
     }
     else if(lastQuote == true && tw.type.i == CMDPUSH){
+      globalError(ERRORQUOTENUMBER);
       return true;
     }
     else {
@@ -1811,7 +1925,12 @@ void programExecute(int singleStep){
   TypeWord tw;
   int remember=programStack.getSelected();
   BreakOut=FALSE;
+  
+#if 1
+  globalError(ERRORNONE);
+#else
   globalerror=0;
+#endif
   if(programScan()){
     // Information less return at this point.
     // Eventually will add diagnostic message, in this case
@@ -1907,18 +2026,14 @@ RowCol AnCPv(RowCol rc){
   rc.col=(rc.col+ANCOLS-1)%ANCOLS;
   return rc;
 }
-int showMessage(int line){
-  Serial.println("showMessage");
+void showMessage(){
   if(globalmessage != NULL){
-    Serial.print("Printing...");
-    Serial.println(globalmessage);
-    line++;
+    int line=1;
     eraseSpace(line,0,COLUMNS);
     GO.lcd.setCharCursor(0, line);
     GO.lcd.printf("%s",globalmessage);
+    globalmessage=NULL;
   }
-  globalmessage=NULL;
-  return line;
 }
 void showAlphaNumeric(int InputState){
   uint16_t color;
@@ -1945,7 +2060,7 @@ void showAlphaNumeric(int InputState){
   showBase40();
 }
 void showState(int InputState, int PreviousInputState){
-  int line=0,limitLine;
+  int limitLine;
   if(InputState == INPUTSTATECLEAR){
     limitLine=ROWS;
   }
@@ -1955,6 +2070,7 @@ void showState(int InputState, int PreviousInputState){
   else if(InputState == INPUTSTATENUMERIC){
     limitLine=ROWS-1;
   }
+#if 1
 // Testing cmdWriteFile
   if(InputState != PreviousInputState){
 // made a difference when changing from CLEAR to NUMERIC
@@ -1962,10 +2078,11 @@ void showState(int InputState, int PreviousInputState){
       eraseSpace(i,0,COLUMNS);
     }
   }
+#endif
   GO.update();
-  line=dataStack.show(line);
-  line=showMessage(line);
-  programStack.show(line+1,InputState,limitLine);
+  dataStack.show();
+  showMessage();
+  programStack.show(InputState,limitLine);
   showAlphaNumeric(InputState);
   GO.update();
   showAccumulator(InputState);
@@ -2104,8 +2221,10 @@ void processEvent(uint16_t pkk, uint16_t tkk){
           programStack.selectNext();
           break;
         case KPUP:
+          programStack.previousLine();
           break;
         case KPDOWN:
+          programStack.nextLine();
           break;
       }
   }
@@ -2151,8 +2270,7 @@ void setup() {
   // Initialize globals
   Word truth;
   truth.i=TRUE;
-  globalmessage=NULL;
-  globalerror=0;
+  globalError(ERRORNONE);
   
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(10, OUTPUT);
