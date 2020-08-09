@@ -36,25 +36,4 @@ The remainder of the screen displays the program.
 
 *Words*
 
-- A number in the program will get pushed to the data stack.
-- QUOTE followed by alpha or special characters will place the numeric (Base 40) equivalent
-  of the characters on the data stack.  This can then be used by certain commands like EMIT,
-  PWRITE and PREAD.
-- PREAD reads a program with the given name from the microSD card.
-- PWRITE write a program with the given name to the microSD card.
-- PLIST lists the programs on the microSD card in the program area.  Programs are stored
-  in ASCII on the microSD card.
-- DAC sends the lowest byte of the top of the stack to the Digital-To-Analog converter
-  which in turn sends the corresponding voltage to the speaker.
-- DELAY waits for the given number of milliseconds.
-- UDELAY waits for the given number of microseconds.
-- RCTNGL writes a rectangle on the screen using the five parameters which should be placed
-  on the stack, as follows:
-  - X coordinate of the upper left-hand corner.
-  - Y coordinate of the upper right-hand corner.
-  - WIDTH
-  - HEIGHT
-  - COLOR
-- RED preceded by an asterix is used for the color red.
-- GREEN preceded by an asterix is used for the color green.
-- BLUE preceded by an asterix is used for the color blue.
+[Click here for word dictionary]https://github.com/JaySpencerAnderson/GOFORTH/blob/master/Dictionary.md
