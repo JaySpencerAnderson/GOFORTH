@@ -1,40 +1,26 @@
 #include <odroid_go.h>
-// Version 1:
-// 32 bit wide Data stack, 32 bit wide program array, 32 bit accumulator
-// Functionality, step 1 - Be able to program a recursive factorial function
-// - Code function
-//   x alpha input
-//   - auto alpha after ":"
-//   - entry in midst of program
-//   - automatic ":" <> ";"
-//   - find function
-//   - enable menu of functions
-//   - returnStack
-// - If function
 // 
 // To Do:
+// 0) I have a follower - get documentation complete, more frequent commits, release notes
+// 1) helpLookup.. in CmdLookup is limited to 64.  At least make 64 a symbol (parameterized)
+// 2) Change hash overflow lookup to the simplest binary search lookup
 // 3) PREAD doesn't work after program download.  Have to cycle power, then it works.  Maybe not fixable.
 // 4) Sometimes left arrow doesn't move to select next (visibly), then left again skips it.
-// - Can't get "Quote Number" error to show.
-//  - HASH (4 bit) lookup for user defined words
 //  - Implement scripted analog computer
 //    - requires graphics, text output, input
 //
-// Scrollable data, program, variable area
 //
-// Optimization ideas
-//  - Get rid of GO.Update inside programExecute loop.  May prevent breaking out.
-// Bugs:
-// - Seems like commenting out GO.Update, now causes problems with PREAD where I get the old one
-//   until I cycle power.
 //
 uint16_t tk, pk, slower;
 uint32_t globalerror;
 const char *globalmessage;
 
+#define VERSION "0.0.1" // Completed work on initial bugs, adding some features
+
 #define TRUE -1
 #define FALSE 0
 #define DEBUG 0
+#define WAIT 0
 
 #define ERRORNONE NULL
 #define ERRORUNDERFLOW 1
@@ -68,13 +54,13 @@ const char *globalmessage;
 
 int InputState=INPUTSTATEMENU,PreviousInputState=INPUTSTATECLEAR;
 int BreakOut;
-
+#if 0
 typedef struct {
   uint32_t word,index;
 } DefinedWord;
 int32_t definedWordIndex=0;
 DefinedWord definedWord[128];
-
+#endif
 #define BASE 40
 char Base40[]=" ABCDEFGHIJKLMNOPQRSTUVWXYZ:;+-*/&|^.<=>\e";
 char Base10[]="0123456789-";
@@ -97,7 +83,7 @@ typedef struct {
 } RowCol;
 typedef struct {
   void (*fptr)(void);
-  GFU original;
+  GFU original, defined;
 } HashEntry;
 typedef struct {
   GFU cmd;
@@ -137,114 +123,6 @@ void globalError(int error){
   return;
 }
 
-class HashLookup {
-/* 256 entries for hash lookup, 44 for overflow */
-  HashEntry table[300];
-  HelpEntry helpLookup[64];
-
-  public:
-    void init(){
-      for(int i=0;i<300;i++){
-        table[i].fptr=NULL;
-        table[i].original=0;
-      }
-      for(int i=0;i<64;i++){
-        helpLookup[i].cmd=0;
-        helpLookup[i].msg=NULL;
-      }
-    }
-    uint32_t computeHash(uint32_t x){
-      uint32_t y=x^(x>>8);
-      return 0xFF&(y^(y>>16));
-    }
-    const char *getHelpMessage(GFU fname){
-      char xyz[13];
-      fromBase40(xyz,fname);
-      for(int i=0;i<64;i++){
-        if(fname == helpLookup[i].cmd){
-          return helpLookup[i].msg;
-        }
-      }
-      return NULL;
-    }
-    void addEntry(void (*fptr)(), GFU fname, const char *msg){
-      char xyz[13];
-      fromBase40(xyz,fname);
-
-      for(int i=0;i<64;i++){
-        if(helpLookup[i].cmd == fname || helpLookup[i].cmd == 0){
-          helpLookup[i].cmd=fname;
-          helpLookup[i].msg=msg;
-          break;
-        }
-      }
-      int i=(int)computeHash(fname);
-      if(table[i].original == 0){
-        table[i].original=fname;
-        table[i].fptr=fptr;
-      }
-      else {
-        for(int i=256;i<300;i++){
-          if(table[i].original == 0){
-            table[i].original=fname;
-            table[i].fptr=fptr;
-            return;
-          }
-        }
-      }
-    }
-    GFU getNextEntry(GFU e){
-      if(e == 0){
-        for(int i=0;i<300;i++){
-          if(table[i].original != 0){
-            return table[i].original;
-          }
-        }
-      }
-      else {
-        for(int i=0;i<300;i++){
-          if(table[i].original == e){
-            for(int j=i+1;j<300;j++){
-              if(table[j].original != 0){
-                return table[j].original;
-              }
-            }
-            return 0;
-          }
-        }        
-      }
-      return 0;
-    }
-    int callEntry(GFU fname){
-#if DEBUG
-      char xyz[13];
-      fromBase40(xyz,fname);
-      Serial.print("Seeking ");
-      Serial.println(fname);
-#endif
-      GFU i=computeHash(fname);
-#if DEBUG
-      Serial.print("Hash is ");
-      Serial.println(i);
-      Serial.print("Found ");
-      fromBase40(xyz,table[i].original);
-      Serial.println(xyz);
-#endif
-      if(table[i].original == fname){
-        (*table[i].fptr)();
-        return TRUE;
-      }
-      else {
-        for(i=256;i<300;i++){
-          if(table[i].original == fname){
-            (*table[i].fptr)();
-            return TRUE;
-          }
-        }
-      }
-      return FALSE;
-    }
-} CmdLookup;
 
 TypeWord Base40Buffer;
 
@@ -326,7 +204,6 @@ int lengthBase40(uint32_t i){
   }
   return len;
 }
-#if 1
 int nBase10(char c){
   int i=0;
   while(Base10[i] != c){
@@ -400,13 +277,30 @@ int32_t toBase10(char *txt){
   }
   return sum*sign;
 }
-#endif
 void eraseLine(int line){
   GO.lcd.fillRect(0,line*16,320,16,0x0000);
 }
 void eraseSpace(int line,int start, int width){
   GO.lcd.fillRect(start*12,line*16,width*12,16,0x0000);
   GO.update();
+}
+uint16_t readkey(){
+  uint16_t tkk=0;
+
+  GO.update();
+
+  tkk |= ((GO.BtnMenu.isPressed()) ? KPMENU : 0);
+  tkk |= ((GO.BtnVolume.isPressed()) ? KPVOLUME : 0);
+  tkk |= ((GO.BtnSelect.isPressed()) ? KPSELECT : 0);
+  tkk |= ((GO.BtnStart.isPressed()) ? KPSTART : 0);
+  tkk |= ((GO.BtnA.isPressed()) ? KPA : 0);
+  tkk |= ((GO.BtnB.isPressed()) ? KPB : 0);
+  tkk |= ((GO.JOY_Y.isAxisPressed() == 2) ? KPUP : 0);
+  tkk |= ((GO.JOY_Y.isAxisPressed() == 1) ? KPDOWN : 0);
+  tkk |= ((GO.JOY_X.isAxisPressed() == 2) ? KPLEFT : 0);
+  tkk |= ((GO.JOY_X.isAxisPressed() == 1) ? KPRIGHT : 0);
+
+  return tkk;
 }
 
 class Heap {
@@ -480,180 +374,7 @@ public:
     }
   }
 } heap;
-class NameStack {
-#define NameStackWIDTH COLUMNS
-  Word Menu[64];
-  int nMenu,nMenuSelected,nMenuOffset;
-  private:
-    void makeGapAt(int n){
-      for(int j=nMenu;j>n;j--){
-        Menu[j]=Menu[j-1];
-      }
-      nMenu++;
-    }
-  public:
-    NameStack(){
-      nMenuSelected=nMenu=nMenuOffset=0;
-    }
-    uint32_t hash6bit(uint32_t x){
-      uint32_t y=x^(x>>6);
-      return 0x3F&(y^(y>>12)^(y>>24));
-    }
-    uint32_t hash7bit(uint32_t x){
-      uint32_t y=x^(x>>7);
-      return 0x7F&(y^(y>>14)^(y>>28));
-    }
-    uint32_t hash(uint32_t x){
-      uint32_t y=x^(x>>8);
-      return 0xFF&(y^(y>>16));
-    }
-    void next(){
-      nMenuSelected=(nMenuSelected+1)%nMenu;
-    }
-    void nextLine(){
-      if(nMenuSelected >= nMenu){
-        nMenuSelected=0;
-        return;
-      }
-      int size=lengthBase40(Menu[nMenuSelected].u);
-      for(int i=nMenuSelected+1;i<nMenu;i++){
-        size+=lengthBase40(Menu[i].u)+1;
-        if(size > NameStackWIDTH){
-          nMenuSelected=i;
-          return;
-        }
-      }
-      nMenuSelected=0;
-    }
-    void previous(){
-      nMenuSelected=(nMenuSelected-1+nMenu)%nMenu;
-    }
-    void previousLine(){
-      int size=lengthBase40(Menu[nMenuSelected].u);
-      for(int i=nMenuSelected-1;i>=0;i--){
-        size+=lengthBase40(Menu[i].u)+1;
-        if(size > NameStackWIDTH){
-          nMenuSelected=i;
-          return;
-        }
-        if(i == 0){
-          nMenuSelected=0;
-          return;
-        }
-      }
-      nMenuSelected=nMenu-1;
-    }
-    Word getSelected(){
-      return Menu[nMenuSelected];
-    }
-    uint32_t sortValue(uint32_t value){
-      while(value < 102400000){
-        value *= 40;
-      }
-      return value;
-    }
-    void push(uint32_t value){
-      char bfr[16];
-      fromBase40(bfr,value);
-      uint32_t sv=sortValue(value);
-      if(nMenu == 0){
-        Menu[nMenu++].u=value;
-      }
-      else if(sv > sortValue(Menu[nMenu-1].u)){
-        Menu[nMenu++].u=value;
-      }
-      else if(sv < sortValue(Menu[0].u)){
-        makeGapAt(0);
-        Menu[0].u=value;
-      }
-      else {
-        for(int i=0;i<nMenu-1;i++){
-          if(sv > sortValue(Menu[i].u) && sv < sortValue(Menu[i+1].u)){
-            makeGapAt(i+1);
-            Menu[i+1].u=value;
-            return;
-          }
-        }
-      }
-    }
-    void show(int InputState){
-      int16_t color;
-      if(InputState == INPUTSTATEMENU){
-        color=NORMALCOLOR;
-      }
-      else {
-        return;
-      }
-      // First of all, build the menu from scratch (including user-defined words)
-      nMenu=0;
-      GFU cmd=0;
-      while((cmd=CmdLookup.getNextEntry(cmd)) != 0){
-        // Only show valid Base40 strings (not CMDPUSH)
-        if(cmd < 4096000000){
-          push(cmd);
-        }
-      }
-      for(int j=0;j<definedWordIndex;j++){
-        push(definedWord[j].word);
-      }
-      nMenuSelected%=nMenu;
-      // Done
-      // First pass - set nMenuOffset
-      int col,row;
-      col=row=0;
-      for(int j=0;j<nMenu;j++){
-        int size=lengthBase40(Menu[j].u);
-        if(col+size > COLUMNS){
-          row++;
-          col=0;
-        }
 
-        if(nMenuSelected == j){
-          if(0 > row-nMenuOffset){
-            nMenuOffset=row;
-          }
-          else if(row-nMenuOffset >= MENUROWS){
-            nMenuOffset=row-MENUROWS+1;
-          }
-          break;
-        }
-        col+=size+1;
-      }
-      // Second pass - show words
-      col=0;
-      row=0-nMenuOffset;
-      for(int j=0;j<nMenu;j++){
-        int screenRow=row+ROWS-MENUROWS;
-        int size=lengthBase40(Menu[j].u);
-        if(col+size > COLUMNS || (j+1) == nMenu){
-          if(0 <= row && row < MENUROWS){
-            eraseSpace(screenRow,col,COLUMNS-col);
-          }
-          row++;
-          screenRow=row+ROWS-MENUROWS;
-          col=0;
-        }
-        if(0 <= row && row < MENUROWS){
-          if(nMenuSelected == j){
-            GO.lcd.setTextColor(NORMALBGCOLOR,color);
-          }
-          else {
-            GO.lcd.setTextColor(color,NORMALBGCOLOR);
-          }
-          GO.lcd.setCharCursor(col, screenRow);
-          char bfr[7];
-          fromBase40(bfr,Menu[j].u);
-          GO.lcd.printf("%s",bfr);
-          if(col+size+1 < COLUMNS){
-            eraseSpace(screenRow,col+size,1);
-          }
-        }
-        col+=size+1;
-      }
-
-      return;
-    }
-} menuStack;
 class DataStack {
     int nws;
     Word value[STACKSIZE];
@@ -718,18 +439,6 @@ class DataStack {
     }
     void erase(int line){
       GO.lcd.fillRect(0,line*16,320,16,0x0000);
-    }
-    void dump(){
-      Serial.println("dataStack.dump");
-      for(int i=0;i<nws;i++){
-        if(value[i].i == CMDPUSH){
-          Serial.print("push ");
-        }
-        else {
-          Serial.print(value[i].u);
-          Serial.println();
-        }
-      }
     }
     void write(File f){
       for(int i=0;i<nws;i++){
@@ -804,10 +513,6 @@ class TypeWordStack {
     void init(){
       selected=-1;
       lastLine=ntw=nOffset=0;      
-    }
-    void dump(){
-      Serial.println("programStack.dump");
-      ds.dump();
     }
     void paste(TypeWord tw){
       if(tw.type.i != NOOP){
@@ -1229,6 +934,7 @@ class TypeWordStack {
           }
           column++;
         }
+        eraseSpace(screenLine,column,COLUMNS-column);              
         for(int i=line-nOffset+1;i<limitLine;i++){
           if(actual && (i-nOffset) >= startLine && (i-nOffset) < limitLine){
             eraseLine(i);
@@ -1237,6 +943,415 @@ class TypeWordStack {
       }
     }
 } programStack, cutStack;
+class HashLookup {
+/* 256 entries for hash lookup, 64 for overflow */
+#define HASHSIZE 256
+#define HASHOVERFLOW 64
+#define HASHHELPSIZE 80
+  HashEntry table[HASHSIZE+HASHOVERFLOW];
+  HelpEntry helpLookup[HASHHELPSIZE];
+  int overflowSize;
+//  int32_t definedWordIndex;
+
+  public:
+    void init(){
+      initDefined();
+      for(int i=0;i<HASHSIZE+HASHOVERFLOW;i++){
+        if(table[i].fptr != NULL){
+          table[i].fptr=NULL;
+          table[i].original=0;
+        }
+      }
+      for(int i=0;i<HASHHELPSIZE;i++){
+        helpLookup[i].cmd=0;
+        helpLookup[i].msg=NULL;
+      }
+      overflowSize=HASHOVERFLOW/2;
+    }
+    void initDefined(){
+      // I'll probably still do this, but...
+      // I can zero out the hash
+//      definedWordIndex=0;
+      for(int i=0;i<HASHSIZE;i++){
+        if(table[i].defined != 0){
+          table[i].defined=0;
+          table[i].original=0;
+        }
+      }      
+      // But have to remove from overflow without leaving gaps.
+      for(int i=HASHSIZE;i<HASHSIZE+HASHOVERFLOW;i++){
+        if(table[i].defined != 0){
+          for(int j=i+1;j<HASHSIZE+HASHOVERFLOW;j++){
+            table[j-1]=table[j];
+          }
+          i=i-1;
+        }        
+      }
+    }
+    uint32_t computeHash(uint32_t x){
+      uint32_t y=x^(x>>8);
+      return 0xFF&(y^(y>>16));
+    }
+    const char *getHelpMessage(GFU fname){
+      char xyz[13];
+      fromBase40(xyz,fname);
+      for(int i=0;i<HASHHELPSIZE;i++){
+        if(fname == helpLookup[i].cmd){
+          return helpLookup[i].msg;
+        }
+      }
+      return NULL;
+    }
+    void setOverflowSize(){
+      overflowSize=HASHOVERFLOW/2;
+      while(overflowSize > 1){
+        if(table[overflowSize].original){
+          return;
+        }
+        overflowSize>>=1;
+      }
+    }
+    void addEntry(void (*fptr)(), GFU fname, const char *msg){
+      for(int i=0;i<HASHHELPSIZE;i++){
+        if(helpLookup[i].cmd == fname || helpLookup[i].cmd == 0){
+          helpLookup[i].cmd=fname;
+          helpLookup[i].msg=msg;
+          break;
+        }
+      }
+      int i=(int)computeHash(fname);
+      if(table[i].original == 0){
+        table[i].original=fname;
+        table[i].defined=0;
+        table[i].fptr=fptr;
+      }
+      else {
+        // Put these in sorted order, largest to smallest (0)
+        for(int i=HASHSIZE;i<HASHSIZE+HASHOVERFLOW;i++){
+          if(fname > table[i].original){
+            for(int j=HASHSIZE+HASHOVERFLOW-1;j>i;j--){
+              table[j]=table[j-1];
+            }
+            table[i].original=fname;
+            table[i].fptr=fptr;
+            table[i].defined=0;
+            setOverflowSize();
+            return;
+          }
+        }
+      }
+    }
+    void addDefinedEntry(int selected, GFU fname){
+      int i=(int)computeHash(fname);
+      // Allow overwriting
+      if(table[i].original == 0 || table[i].original == fname){
+        table[i].original=fname;
+        table[i].fptr=NULL;
+        table[i].defined=selected;
+      }
+      else {
+        // Put these in sorted order, largest to smallest (0)
+        // This will allow overwriting native words
+        for(int i=HASHSIZE;i<HASHSIZE+HASHOVERFLOW;i++){
+          if(fname > table[i].original){
+            for(int j=HASHSIZE+HASHOVERFLOW-1;j>i;j--){
+              table[j].original=table[j-1].original;
+              table[j].fptr=table[j-1].fptr;
+              table[j].defined=table[j-1].defined;
+            }
+          }
+          if(fname >= table[i].original){
+            table[i].original=fname;
+            table[i].fptr=NULL;          
+            table[i].defined=selected;
+            setOverflowSize();
+            return;
+          }
+        }
+      }
+    }
+    GFU getNextEntry(GFU e){
+      // In terms of HASHSIZE and HASHOVERFLOW
+      if(e == 0){
+        for(int i=0;i<HASHSIZE+HASHOVERFLOW;i++){
+          if(table[i].original != 0){
+            return table[i].original;
+          }
+        }
+      }
+      else {
+        for(int i=0;i<HASHSIZE+HASHOVERFLOW;i++){
+          if(table[i].original == e){
+            for(int j=i+1;j<HASHSIZE+HASHOVERFLOW;j++){
+              if(table[j].original != 0){
+                return table[j].original;
+              }
+            }
+            return 0;
+          }
+        }        
+      }
+      return 0;
+    }
+    int callEntry(GFU fname){
+      GFU i=computeHash(fname);
+      if(table[i].original == fname){
+        if(table[i].fptr != NULL){
+          (*table[i].fptr)();
+        }
+        else {
+          // Push return address
+          Word w;
+          w.i=programStack.getSelected();
+          returnStack.push(w);
+          // Set next address
+          programStack.setSelected(table[i].defined);
+        }
+        return TRUE;
+      }
+      else {
+// Want to replace this with a binary search - which means they have to be in order
+        int i=HASHSIZE;
+#if DEBUG
+        Serial.print("Seeking ");
+        Serial.println(fname);
+#endif
+        for(int bt=overflowSize;bt;bt>>=1){
+          i^=bt;
+#if DEBUG
+          Serial.print(i);
+          Serial.print(": ");
+          Serial.println(table[i].original);
+#endif
+          if(table[i].original == fname){
+            if(table[i].fptr != NULL){
+              (*table[i].fptr)();
+            }
+            else {
+              // Push return address
+              Word w;
+              w.i=programStack.getSelected();
+              returnStack.push(w);
+              // Set next address
+              programStack.setSelected(table[i].defined);
+            }
+            return TRUE;
+          }
+          else if(table[i].original < fname){
+            i^=bt;
+          }
+        }
+      }
+      return FALSE;
+    }
+#if DEBUG
+    void dump(){
+      for(int i=0;i<HASHSIZE;i++){
+        if(table[i].original){
+          char xyz[7];
+          fromBase40(xyz,table[i].original);
+          Serial.print(xyz);
+          Serial.print(" ");
+          Serial.print((table[i].fptr != NULL));
+          Serial.print(" ");
+          Serial.println(table[i].defined);
+        }
+      }
+      Serial.println("-----------------------------------");
+      for(int i=0;i<HASHOVERFLOW;i++){
+        if(table[HASHSIZE+i].original){
+          Serial.print(HASHSIZE+i);
+          Serial.print(": ");
+          Serial.println(table[HASHSIZE+i].original);
+        }
+      }
+    }
+#endif
+} CmdLookup;
+class NameStack {
+#define NameStackWIDTH COLUMNS
+// Issue 0.1.0.3 - Increased size of Menu from 64 to 256
+#define NameStackWORDS 256
+  Word Menu[NameStackWORDS];
+  int nMenu,nMenuSelected,nMenuOffset;
+  private:
+    void makeGapAt(int n){
+// Issue 0.1.0.3 - Added bounds checking
+      if(nMenu < NameStackWORDS){
+        for(int j=nMenu;j>n;j--){
+          Menu[j]=Menu[j-1];
+        }
+        nMenu++;
+      }
+    }
+  public:
+    NameStack(){
+      nMenuSelected=nMenu=nMenuOffset=0;
+    }
+    uint32_t hash(uint32_t x){
+      uint32_t y=x^(x>>8);
+      return 0xFF&(y^(y>>16));
+    }
+    void next(){
+      nMenuSelected=(nMenuSelected+1)%nMenu;
+    }
+    void nextLine(){
+      if(nMenuSelected >= nMenu){
+        nMenuSelected=0;
+        return;
+      }
+      int size=lengthBase40(Menu[nMenuSelected].u);
+      for(int i=nMenuSelected+1;i<nMenu;i++){
+        size+=lengthBase40(Menu[i].u)+1;
+        if(size > NameStackWIDTH){
+          nMenuSelected=i;
+          return;
+        }
+      }
+      nMenuSelected=0;
+    }
+    void previous(){
+      nMenuSelected=(nMenuSelected-1+nMenu)%nMenu;
+    }
+    void previousLine(){
+      int size=lengthBase40(Menu[nMenuSelected].u);
+      for(int i=nMenuSelected-1;i>=0;i--){
+        size+=lengthBase40(Menu[i].u)+1;
+        if(size > NameStackWIDTH){
+          nMenuSelected=i;
+          return;
+        }
+        if(i == 0){
+          nMenuSelected=0;
+          return;
+        }
+      }
+      nMenuSelected=nMenu-1;
+    }
+    Word getSelected(){
+      return Menu[nMenuSelected];
+    }
+    uint32_t sortValue(uint32_t value){
+      while(value < 102400000){
+        value *= 40;
+      }
+      return value;
+    }
+    void push(uint32_t value){
+      uint32_t sv=sortValue(value);
+      char xyz[7];
+      fromBase40(xyz,value);
+      if(nMenu == 0){
+        Menu[nMenu++].u=value;
+      }
+      else if(sv > sortValue(Menu[nMenu-1].u)){
+        Menu[nMenu++].u=value;
+      }
+      else if(sv < sortValue(Menu[0].u)){
+        makeGapAt(0);
+        Menu[0].u=value;
+      }
+      else {
+        for(int i=0;i<nMenu-1;i++){
+          if(sv > sortValue(Menu[i].u) && sv < sortValue(Menu[i+1].u)){
+            makeGapAt(i+1);
+            Menu[i+1].u=value;
+            return;
+          }
+        }
+      }
+    }
+    void show(int InputState){
+      int16_t color;
+      char xyz[7];
+      if(InputState == INPUTSTATEMENU){
+        color=NORMALCOLOR;
+      }
+      else {
+        return;
+      }
+      // First of all, build the menu from scratch (including user-defined words)
+      nMenu=0;
+      GFU cmd=0;
+      while((cmd=CmdLookup.getNextEntry(cmd)) != 0){
+        // Only show valid Base40 strings (not CMDPUSH)
+        if(cmd < 4096000000){
+          push(cmd);
+        }
+      }
+#if 0
+      for(int j=0;j<definedWordIndex;j++){
+        push(definedWord[j].word);
+      }
+#endif
+      nMenuSelected%=nMenu;
+      // Done
+      // First pass - set nMenuOffset
+      int col,row;
+      col=row=0;
+      for(int j=0;j<nMenu;j++){
+        int size=lengthBase40(Menu[j].u);
+        if(col+size > COLUMNS){
+          row++;
+          col=0;
+        }
+
+        if(nMenuSelected == j){
+          if(0 > row-nMenuOffset){
+            nMenuOffset=row;
+          }
+          else if(row-nMenuOffset >= MENUROWS){
+            nMenuOffset=row-MENUROWS+1;
+          }
+          break;
+        }
+        col+=size+1;
+      }
+      // Second pass - show words
+      col=0;
+      row=0-nMenuOffset;
+
+      for(int j=0;j<nMenu;j++){
+        int screenRow=row+ROWS-MENUROWS;
+        int size=lengthBase40(Menu[j].u);
+        // Clear the rest of the line
+        // If the next one won't fit on this line
+        if(col+size > COLUMNS){
+          if(0 <= row && row < MENUROWS){
+            eraseSpace(screenRow,col,COLUMNS-col);
+          }
+          row++;
+          screenRow=row+ROWS-MENUROWS;
+          col=0;
+        }
+        // If this is the last one
+        if((j+1) == nMenu){
+          if(0 <= row && row < MENUROWS){
+            eraseSpace(screenRow,col,COLUMNS-col);
+          }
+        }
+        // Write the word
+        if(0 <= row && row < MENUROWS){
+          if(nMenuSelected == j){
+            GO.lcd.setTextColor(NORMALBGCOLOR,color);
+          }
+          else {
+            GO.lcd.setTextColor(color,NORMALBGCOLOR);
+          }
+          GO.lcd.setCharCursor(col, screenRow);
+          char bfr[7];
+          fromBase40(bfr,Menu[j].u);
+          GO.lcd.printf("%s",bfr);
+          if(col+size+1 <= COLUMNS){
+            eraseSpace(screenRow,col+size,1);
+          }
+        }
+        col+=size+1;
+      }
+
+      return;
+    }
+} menuStack;
 
 int32_t accumulator,increment;
 int32_t cmdIndex=1;
@@ -1292,10 +1407,12 @@ void kpPlay(uint32_t ln){
     }
   }
 }
+#if WAIT
 void kpWait(uint32_t ln){
   dacWrite(SPEAKER_PIN, (uint8_t)0);
   delayMicroseconds(32*1024*ln);
 }
+#endif
 void resetEvent(){
   increment=1;
   accumulator=0;
@@ -1434,6 +1551,45 @@ void cmdDivide(){
   c.i=k;
   dataStack.push(c);
 }
+void cmdPower(){
+  Word a,b,c;
+  GFI i,j,k;
+  
+  a=dataStack.pop();
+  i=a.u;
+  b=dataStack.pop();
+  j=b.i;
+  k=1;
+  for(int n=0;n<i;n++){
+    k*=j;
+  }
+  c.i=k;
+  dataStack.push(c);
+}
+void cmdShiftLeft(){
+  Word a,b,c;
+  GFI i,j,k;
+  
+  a=dataStack.pop();
+  i=a.u;
+  b=dataStack.pop();
+  j=b.i;
+  k=j<<i;
+  c.i=k;
+  dataStack.push(c);
+}
+void cmdShiftRight(){
+  Word a,b,c;
+  GFI i,j,k;
+  
+  a=dataStack.pop();
+  i=a.u;
+  b=dataStack.pop();
+  j=b.i;
+  k=j>>i;
+  c.i=k;
+  dataStack.push(c);
+}
 void cmdModulo(){
   Word a,b,c;
   GFI i,j,k;
@@ -1470,32 +1626,46 @@ void cmdXor(){
   c.u=b.u^a.u;
   dataStack.push(c);
 }
-void cmdNot(){
-  Word a,c;
-
-  a=dataStack.pop();
-  c.u=~a.u;
-  dataStack.push(c);
-}
 void cmdLt(){ 
   Word a,b,c;
   a=dataStack.pop();
   b=dataStack.pop();
-  c.u=(b.i < a.i)?-1:0;
+  c.u=(b.i < a.i)?TRUE:FALSE;
   dataStack.push(c);
 }
 void cmdEqual(){
   Word a,b,c;
   a=dataStack.pop();
   b=dataStack.pop();
-  c.i=(b.i == a.i)?-1:0;
+  c.i=(b.i == a.i)?TRUE:FALSE;
   dataStack.push(c);
 }
 void cmdGt(){
   Word a,b,c;
   a=dataStack.pop();
   b=dataStack.pop();
-  c.u=(b.i > a.i)?-1:0;
+  c.u=(b.i > a.i)?TRUE:FALSE;
+  dataStack.push(c);
+}
+void cmdLtEqual(){ 
+  Word a,b,c;
+  a=dataStack.pop();
+  b=dataStack.pop();
+  c.u=(b.i <= a.i)?TRUE:FALSE;
+  dataStack.push(c);
+}
+void cmdNotEqual(){
+  Word a,b,c;
+  a=dataStack.pop();
+  b=dataStack.pop();
+  c.i=(b.i != a.i)?TRUE:FALSE;
+  dataStack.push(c);
+}
+void cmdGtEqual(){
+  Word a,b,c;
+  a=dataStack.pop();
+  b=dataStack.pop();
+  c.u=(b.i >= a.i)?TRUE:FALSE;
   dataStack.push(c);
 }
 void cmdPut32(){
@@ -1574,11 +1744,13 @@ void cmdEmitn(){
   GO.lcd.printf("%d",a.i);
   GO.update();
 }
+#if WAIT
 void cmdWait(){
   Word a;
   a=dataStack.pop();
   kpWait(a.u);
 }
+#endif
 void cmdDelay(){
   Word a;
   a=dataStack.pop();
@@ -1594,6 +1766,7 @@ void cmdUdelay(){
   a=dataStack.pop();
   delayMicroseconds(a.u);
 }
+#if 0
 void cmdPinMode(){
   Word a,b;
   a=dataStack.pop();
@@ -1606,6 +1779,8 @@ void cmdPinWrite(){
   b=dataStack.pop();
   digitalWrite(a.u, b.u);
 }
+#endif
+#if 0
 void cmdIf(){
   Word a;
   
@@ -1618,10 +1793,33 @@ void cmdIf(){
     }
   }
 }
-void cmdDo(){
-#if DEBUG
-  Serial.println("cmdDo");
+#else
+void cmdIf(){
+  int level=0;
+  Word a;
+  
+  
+  a=dataStack.pop();
+  if(a.i == 0){
+    while(-1){
+      programStack.selectNext();
+      TypeWord tw=programStack.copy();
+      if(level == 0){
+        if(tw.type.u == toBase40("THEN") || tw.type.u == toBase40("ELSE")){
+          return;
+        }
+      }
+      if(tw.type.u == toBase40("IF")){
+        level++;
+      }
+      else if(tw.type.u == toBase40("THEN")){
+        level--;
+      }
+    }
+  }
+}
 #endif
+void cmdDo(){
   Word a,b,c;
   a=dataStack.pop();
   b=dataStack.pop();
@@ -1653,6 +1851,13 @@ void cmdTrue(){
   Word a;
   a.i=TRUE;
   dataStack.push(a);
+}
+void cmdRandom(){
+  Word a,b;
+  
+  a=dataStack.pop();
+  b.i=random(a.i);
+  dataStack.push(b);
 }
 void cmdRed(){
   Word a;
@@ -1790,13 +1995,6 @@ void cmdSemicolon(){
   if(returnStack.size() > 0){
     programStack.setSelected(returnStack.pop().i);
   }
-#if 0
-  else {
-    // ERROR: Ran into ; without returnStack entry
-    Serial.println(" -1 !!!");
-    break;
-  }
-#endif
 }
 void cmdPread(){
   Serial.println("PREAD");
@@ -1808,36 +2006,46 @@ void cmdPlist(){
 void cmdPsave(){
   programStack.WriteFile(dataStack.pop());
 }
+#if DEBUG
+void cmdDump(){
+  CmdLookup.dump();
+}
+#endif
 void commandInit(){
   CmdLookup.addEntry(&cmdPush, CMDPUSH, "(- value)");
   CmdLookup.addEntry(&cmdBreakOut, toBase40(":"), "(-)");
   CmdLookup.addEntry(&cmdPlus, toBase40("+"),     "(r1 r2 - sum)");
   CmdLookup.addEntry(&cmdMinus, toBase40("-"),    "(r1 r2 - difference)");
   CmdLookup.addEntry(&cmdTimes, toBase40("*"),    "(r1 r2 - product)");
-  CmdLookup.addEntry(&cmdDivide, toBase40("/"),   "(dividend divisor - value)");
+  CmdLookup.addEntry(&cmdDivide, toBase40("/"),   "(dividend divisor - result)");
+  CmdLookup.addEntry(&cmdPower, toBase40("**"),   "(base exponent - result)");
+  CmdLookup.addEntry(&cmdShiftLeft, toBase40("<<"),   "(number bits - result)");
+  CmdLookup.addEntry(&cmdShiftRight, toBase40(">>"),   "(number bits - result)");
   CmdLookup.addEntry(&cmdAnd, toBase40("&"),      "(r1 r2 - and)");
   CmdLookup.addEntry(&cmdOr, toBase40("|"),       "(r1 r2 - or)");
-  CmdLookup.addEntry(&cmdXor, toBase40("XOR"),    "(r1 r2 - xor)");
+  CmdLookup.addEntry(&cmdXor, toBase40("^"),    "(r1 r2 - xor)");
   CmdLookup.addEntry(&cmdLt, toBase40("<"),       "(r1 r2 - less?)");
   CmdLookup.addEntry(&cmdEqual, toBase40("="),    "(r1 r2 - equal?)");
   CmdLookup.addEntry(&cmdGt, toBase40(">"),       "(r1 r2 - greater)");
+  CmdLookup.addEntry(&cmdLtEqual, toBase40("<="),       "(r1 r2 - lessOrEqual?)");
+  CmdLookup.addEntry(&cmdNotEqual, toBase40("<>"),    "(r1 r2 - notEqual?)");
+  CmdLookup.addEntry(&cmdGtEqual, toBase40(">="),       "(r1 r2 - greaterOrEqual)");
   CmdLookup.addEntry(&cmdDac, toBase40("DAC"),    "(r1 -)");
   CmdLookup.addEntry(&cmdGet8, toBase40("GETBYT"),"(r1 - value)");
   CmdLookup.addEntry(&cmdPut8, toBase40("PUTBYT"),"(r1 r2 -)");
   CmdLookup.addEntry(&cmdGet32, toBase40("GET"),  "(r1 - value)");
   CmdLookup.addEntry(&cmdPut32, toBase40("PUT"),  "(r1 r2 -)");
   CmdLookup.addEntry(&cmdModulo, toBase40("MOD"), "(dividend divisor - rem)");
-  // Liable to get deleted
   CmdLookup.addEntry(&cmdNote, toBase40("NOTE"),  "(r1 r2 -)");
+#if WAIT
   // Liable to get deleted
   CmdLookup.addEntry(&cmdWait, toBase40("WAIT"),  "(r1 -)");
+#endif
   CmdLookup.addEntry(&cmdDelay, toBase40("DELAY"),"(r1 -)");
   CmdLookup.addEntry(&cmdUdelay, toBase40("UDELAY"), "(r1 -)");
   CmdLookup.addEntry(&cmdSlower, toBase40("SLOWER"), "(r1 -)");
-  // Liable to get deleted
   CmdLookup.addEntry(&cmdFalse, toBase40("*FALSE"), "(- value)");
   CmdLookup.addEntry(&cmdQuote, toBase40("QUOTE"),"(- value)");
-  // Liable to get deleted
   CmdLookup.addEntry(&cmdTrue, toBase40("*TRUE"), "(- value)");
   CmdLookup.addEntry(&cmdRed, toBase40("*RED"),   "(- value)");
   CmdLookup.addEntry(&cmdGreen,toBase40("*GREEN"),"(- value)");
@@ -1868,21 +2076,29 @@ void commandInit(){
   CmdLookup.addEntry(&cmdBegin, toBase40("BEGIN"),"(-)");
   CmdLookup.addEntry(&cmdAgain, toBase40("AGAIN"),"(-)");
   CmdLookup.addEntry(&cmdUntil, toBase40("UNTIL"),"(r1 -)");
+#if 0
   // Liable to be replaced with I2C commands
   CmdLookup.addEntry(&cmdPinMode, toBase40("PINMOD"), "(pin mode -)");
   // Liable to be replaced with I2C commands
   CmdLookup.addEntry(&cmdPinWrite, toBase40("PINWRI"), "(pin value -)");
+#endif
   CmdLookup.addEntry(&cmdLoopVariable, toBase40("I"), "(- value)");
+  CmdLookup.addEntry(&cmdRandom, toBase40("RANDOM"), "(- value)");
   CmdLookup.addEntry(&cmdRctngl, toBase40("RCTNGL"), "(x y wt ht color -)");
   CmdLookup.addEntry(&cmdCircle, toBase40("CIRCLE"), "(x y radius color -)");
   CmdLookup.addEntry(&cmdCup, toBase40("CUP"),       "(row column -)");
   CmdLookup.addEntry(&cmdEmit, toBase40("EMIT"), "(r1 -)");
   CmdLookup.addEntry(&cmdButton, toBase40("BUTTON"), "(- value)");
   CmdLookup.addEntry(&cmdEmitn, toBase40("."), "(r1 -)");
+#if DEBUG
+  CmdLookup.addEntry(&cmdDump, toBase40("DUMP"), "(-)");
+#endif
 }
 int programScan(){
   int level=0,lastQuote=false;
-  definedWordIndex=0;
+ 
+//  definedWordIndex=0;
+  CmdLookup.initDefined();
   programStack.selectFirst();
   while(level >= 0 && programStack.getSelected() != -1){
     TypeWord tw=programStack.copy();
@@ -1891,9 +2107,7 @@ int programScan(){
       level++;
       programStack.selectNext();
       tw=programStack.copy();
-      definedWord[definedWordIndex].word=tw.type.u;
-      definedWord[definedWordIndex].index=programStack.getSelected();
-      definedWordIndex++;
+      CmdLookup.addDefinedEntry(programStack.getSelected(), tw.type.u);
     }
     else if(tw.type.u == toBase40(";")){
       lastQuote=false;
@@ -1913,24 +2127,12 @@ int programScan(){
   }
   return false;
 }
-void dumpDefined(){
-  for(int i=0;i<definedWordIndex;i++){
-    Serial.print("DefinedWord: ");
-    Serial.print(definedWord[i].word);
-    Serial.print(": ");
-    Serial.println(definedWord[i].index);
-  }
-}
 void programExecute(int singleStep){
   TypeWord tw;
   int remember=programStack.getSelected();
   BreakOut=FALSE;
   
-#if 1
   globalError(ERRORNONE);
-#else
-  globalerror=0;
-#endif
   if(programScan()){
     // Information less return at this point.
     // Eventually will add diagnostic message, in this case
@@ -1945,7 +2147,7 @@ void programExecute(int singleStep){
   }
   while(programStack.getSelected() != -1){
     tw=programStack.copy();
-    // How much does this cost?
+    // This implements a program break by switching to single step mode if both B and A are pressed
     if(slower){
       GO.update();
       if( GO.BtnA.isPressed() && GO.BtnB.isPressed() ){
@@ -1955,6 +2157,7 @@ void programExecute(int singleStep){
     if(CmdLookup.callEntry(tw.type.u)){
       /* NOOP - already called function */
     }
+#if 0
     else {
       for(int j=0;j<definedWordIndex;j++){
         if(tw.type.u == definedWord[j].word){
@@ -1968,6 +2171,7 @@ void programExecute(int singleStep){
         }
       }
     }
+#endif
     if(globalerror){
       return;
     }
@@ -2070,7 +2274,6 @@ void showState(int InputState, int PreviousInputState){
   else if(InputState == INPUTSTATENUMERIC){
     limitLine=ROWS-1;
   }
-#if 1
 // Testing cmdWriteFile
   if(InputState != PreviousInputState){
 // made a difference when changing from CLEAR to NUMERIC
@@ -2078,7 +2281,6 @@ void showState(int InputState, int PreviousInputState){
       eraseSpace(i,0,COLUMNS);
     }
   }
-#endif
   GO.update();
   dataStack.show();
   showMessage();
@@ -2164,8 +2366,6 @@ void processEvent(uint16_t pkk, uint16_t tkk){
         Word w;
         w=menuStack.getSelected();
         globalmessage=CmdLookup.getHelpMessage(w.u);
-        Serial.print("message is ");
-        Serial.println(globalmessage);
         break;
     }
   }
@@ -2194,11 +2394,9 @@ void processEvent(uint16_t pkk, uint16_t tkk){
       switch(tkk){
         case KPB:
           programExecute(FALSE);
-          Serial.println("Completed programExecute(FALSE)");
           break;
         case KPB|KPA:
           programExecute(TRUE);
-          Serial.println("Completed programExecute(TRUE)");
           break;
         case KPMENU:
           break;
@@ -2232,24 +2430,6 @@ void processEvent(uint16_t pkk, uint16_t tkk){
     showState(InputState,PreviousInputState);
   }
 }
-uint16_t readkey(){
-  uint16_t tkk=0;
-
-  GO.update();
-
-  tkk |= ((GO.BtnMenu.isPressed()) ? KPMENU : 0);
-  tkk |= ((GO.BtnVolume.isPressed()) ? KPVOLUME : 0);
-  tkk |= ((GO.BtnSelect.isPressed()) ? KPSELECT : 0);
-  tkk |= ((GO.BtnStart.isPressed()) ? KPSTART : 0);
-  tkk |= ((GO.BtnA.isPressed()) ? KPA : 0);
-  tkk |= ((GO.BtnB.isPressed()) ? KPB : 0);
-  tkk |= ((GO.JOY_Y.isAxisPressed() == 2) ? KPUP : 0);
-  tkk |= ((GO.JOY_Y.isAxisPressed() == 1) ? KPDOWN : 0);
-  tkk |= ((GO.JOY_X.isAxisPressed() == 2) ? KPLEFT : 0);
-  tkk |= ((GO.JOY_X.isAxisPressed() == 1) ? KPRIGHT : 0);
-
-  return tkk;
-}
 void keypress(){
   uint16_t tkk=readkey();
   if(tkk != pk){
@@ -2281,6 +2461,13 @@ void setup() {
   dacWrite(SPEAKER_PIN, (uint8_t)0);
   GO.lcd.setTextSize(2);
   GO.lcd.setTextColor(NORMALCOLOR);
+  // Show Version
+  GO.lcd.setCharCursor(2, 3);
+  GO.lcd.printf("GO Forth, Version %s",VERSION);
+  GO.lcd.setCharCursor(2, 4);
+  GO.lcd.printf("written by Jay Anderson");
+  GO.update();
+  delay(2500);
   CmdLookup.init();
   dataStack.clear();
   commandInit();
