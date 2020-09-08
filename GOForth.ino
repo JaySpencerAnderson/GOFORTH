@@ -1,4 +1,5 @@
 #include <odroid_go.h>
+#include <math.h>
 // 
 // To Do:
 // 0) I have a follower - get documentation complete, more frequent commits, release notes
@@ -7,22 +8,33 @@
 // 3) PREAD doesn't work after program download.  Have to cycle power, then it works.  Maybe not fixable.
 // 4) Sometimes left arrow doesn't move to select next (visibly), then left again skips it.
 //  - Implement scripted analog computer
-//    - requires graphics, text output, input
+//    - requires graphics, text output, inputs
 //
-//
+// Floating Point
+// 1) Entering floating point - DONE
+// 2) Showing floting numbers in program - DONE
+// 3) No straight forward (without changing structure of stack) method of showing floats in stack
+// 4) Floating point methods - DONE
+// 4a) Conversion methods - DONE
+// 5) ReadFile, WriteFile - DONE
+// Bugs: after entering float, increment gets set to 0 or -1 - NOT SEEN
+//       I noticed it reboot after doing A-B in numeric and other stuff. - NOT SEEN
+//       Numeric entry changes to yellow at some point. - DONE
+//       View decimal position when entering float - DONE
 //
 uint16_t tk, pk, slower;
 uint32_t globalerror;
 const char *globalmessage;
 
-#define VERSION "0.0.1" // Completed work on initial bugs, adding some features
+// #define VERSION "0.0.2" // Completed work on initial bugs, adding some features
+#define VERSION "0.0.3" // Added floating point
 
 #define TRUE -1
 #define FALSE 0
 #define DEBUG 0
 #define WAIT 0
 
-#define ERRORNONE NULL
+#define ERRORNONE 0
 #define ERRORUNDERFLOW 1
 #define ERROROVERFLOW 2
 #define ERRORQUOTENUMBER 3
@@ -45,12 +57,16 @@ const char *globalmessage;
 #define KPALPHA KPSTART
 
 #define CMDPUSH -1
+#define CMDFPUSH -2
 #define NOOP 0x00
 
 #define INPUTSTATEALPHANUMERIC 0
 #define INPUTSTATENUMERIC 1
 #define INPUTSTATECLEAR 2
 #define INPUTSTATEMENU 3
+
+#define KEEPHASH -1
+#define FLOATING -1
 
 int InputState=INPUTSTATEMENU,PreviousInputState=INPUTSTATECLEAR;
 int BreakOut;
@@ -74,9 +90,16 @@ char Base10[]="0123456789-";
 #define BASE40COL 8
 
 #define STACKSIZE 1024
+#if FLOATING
+typedef float GFF;
+typedef int32_t GFI;
+typedef uint32_t GFU;
+typedef union {GFU u; GFI i;GFF f;} Word;
+#else
 typedef int32_t GFI;
 typedef uint32_t GFU;
 typedef union {GFU u; GFI i;} Word;
+#endif
 typedef struct {Word type, value;} TypeWord;
 typedef struct {
   int16_t row,col;
@@ -214,6 +237,71 @@ int nBase10(char c){
   }
   return i;
 }
+int nFloat(char c){
+  char Float[]="0123456789-.";
+  int i=0;
+  while(Float[i] != c){
+    i++;
+    if(i == strlen(Float)){
+      return -1;
+    }
+  }
+  return i;
+}
+int isFloat(char *txt){
+  int sign=1,next=0,point=false;
+  int i=nFloat(txt[next]);
+  if(i == -1){
+    return false;
+  }
+  if(i == 10){
+    sign=-1;
+    next++;
+  }
+  while(txt[next] != 0 && txt[next] != ' ' && txt[next] != '\n' && txt[next] != '\r' && txt[next] != '\t'){
+    i=nBase10(txt[next++]);
+    if(point == false && i == 11){
+      point=true;
+    }
+    else if(i == -1 || i > 9){
+      return false;
+    }
+  }
+  return true;  
+}
+GFF toFloat(char *txt){
+  int next=0,point=false;
+  GFF sign=1.0,sum=0.0,divisor=1.0;;
+  int i=nFloat(txt[next]);
+  if(i == -1){
+    return 0;
+  }
+  if(i == 10){
+    sign=-1.0;
+    next++;
+  }
+  while(txt[next] != 0 && txt[next] != ' ' && txt[next] != '\n' && txt[next] != '\r' && txt[next] != '\t'){
+    i=nFloat(txt[next++]);
+    if(point){
+      divisor*=10.0;
+    }
+    if(point == false && i == 11){
+      point=true;
+    }
+    else if(i == -1 || i > 9){
+      return 0;
+    }
+    else {
+      if(point){
+        sum+=((GFF)i)/divisor;
+      }
+      else {
+        sum=(10.0*sum)+(GFF)i;
+      }
+    }
+  }
+  return sum*sign;
+}
 int isBase10(char *txt){
   int sign=1,next=0;
   int i=nBase10(txt[next]);
@@ -302,7 +390,173 @@ uint16_t readkey(){
 
   return tkk;
 }
+class Accumulator {
+  Word accumulator,increment;
+  int floating;
+  public:
+  void init(){
+    accumulator.i=0;
+    increment.i=1;
+    floating=false;
+  }
+  void incr(){
+    if(floating){
+      accumulator.f += increment.f;
+    }
+    else {
+      accumulator.i += increment.i;
+    }
+  }
+  void decr(){
+    if(floating){
+      accumulator.f -= increment.f;
+    }
+    else {
+      accumulator.i-=increment.i;
+    }
+  }
+  void shiftLeft(){
+    if(floating){
+      increment.f *= 10.0;
+    }
+    else {
+      increment.i=(increment.i >= 1000000000)?increment.i:increment.i*10;
+    }
+  }
+  void shiftRight(){
+    if(floating){
+      increment.f /= 10.0;
+    }
+    else {
+#if 1
+      if(increment.i == 1){
+        floating=true;
+        increment.f=1.0/10.0;
+        accumulator.f = (GFF)accumulator.i;
+      }
+      else {
+        increment.i /= 10;
+      }
+#else
+      increment.i=(increment.i == 1)?1:increment.i/10;
+#endif
+    }
+  }
+  void minimums(){
+    if(floating == false && increment.i < 1){
+      increment.i=1;
+    }
+  }
+  int isFloating(){
+    return floating;
+  }
+  Word get(){
+    return accumulator;
+  }
+  void show(int InputState){
+#define ATCOLUMN 7
+    int size=11;
+    int16_t color;
+    Word accu=accumulator,incr=increment;
+    if(InputState == INPUTSTATENUMERIC){
+      color=NORMALCOLOR;
+    }
+    else {
+      return;
+    }
+    eraseSpace(ROWS-1,ATCOLUMN,size);
+    char space=' ';
+// Not yet
+    if(floating){
+      if(roundf(incr.f) >= 1.0){
+        incr.f = roundf(incr.f);
+      }
+      // floating point display
+      GFF places=10.0,remainder;
+      int digit,i=0;
+      GO.lcd.setTextColor(color,NORMALBGCOLOR);
+      if(accu.f < 0){
+        space='-';
+        accu.f*=-1;
+        GO.lcd.setCharCursor(ATCOLUMN+(i++),ROWS-1);
+        GO.lcd.printf("%c",space);
+      }
+      while(places <= accu.f || places <= incr.f){
+        places *= 10.0;
+      }
+      // Leading digits
+      while(places > 1.0){
+        places /= 10.0;
+        digit = ((int)(accu.f / places)) % 10;
+//        if(roundf(incr.f) == places){
+        if(incr.f == places){
+          GO.lcd.setTextColor(NORMALBGCOLOR,color);
+        }
+        else {
+          GO.lcd.setTextColor(color,NORMALBGCOLOR);
+        }
+        GO.lcd.setCharCursor(ATCOLUMN+(i++),ROWS-1);
+        if(digit == 0 && places > accu.f){
+          GO.lcd.printf(" ");
+        }
+        else {
+          GO.lcd.printf("%d",digit);
+        }
+      }
+      // Then the decimal point
+      space='.';
+      GO.lcd.setCharCursor(ATCOLUMN+(i++),ROWS-1);
+      GO.lcd.setTextColor(color,NORMALBGCOLOR);
+      GO.lcd.printf("%c",space);
 
+      // Fractional digits
+      places = 10.0;
+      accu.f -= (float)((int)accu.f);
+      while((ATCOLUMN+i) < 26){
+        digit = ((int)(accu.f * places))%10;
+        if(roundf(1.0/incr.f) == places){
+          GO.lcd.setTextColor(NORMALBGCOLOR,color);
+        }
+        else {
+          GO.lcd.setTextColor(color,NORMALBGCOLOR);
+        }
+        GO.lcd.setCharCursor(ATCOLUMN+(i++),ROWS-1);
+        GO.lcd.printf("%d",digit);
+        places *= 10.0;
+      }
+    }
+    else {
+      // Integer display
+      if(accu.i < 0){
+        space='-';
+        accu.i*=-1;
+      }
+      else if(accu.i == 0){
+        space='0';
+      }
+      
+      for(int i=0;i<size;i++){
+        if(incr.i == 1){
+          GO.lcd.setTextColor(NORMALBGCOLOR,color);
+        }
+        else {
+          GO.lcd.setTextColor(color,NORMALBGCOLOR);
+        }
+        GO.lcd.setCharCursor(ATCOLUMN-1+size-i,ROWS-1);
+        if(accu.i == 0){
+          GO.lcd.printf("%c",space);
+          space=' ';
+        }
+        else {
+          GO.lcd.printf("%d",accu.i%10);
+        }
+        incr.i/=10;
+        accu.i/=10;
+      }
+      eraseSpace(ROWS-1,ATCOLUMN+size,COLUMNS-(ATCOLUMN+size));
+    }
+  }
+} accumulator;
 class Heap {
 #define HEAPLIMITB 0x10000
 #define HEAPLIMITW 0x4000
@@ -495,7 +749,7 @@ class TypeWordStack {
       while(i < ds.size()){
         /* Get a TypeWord and keep count */
         tw.type=ds.copy(i++);
-        if(tw.type.i == CMDPUSH){
+        if(tw.type.i == CMDPUSH || tw.type.i == CMDFPUSH){
           tw.value=ds.copy(i++);
         }
         w++;
@@ -513,12 +767,13 @@ class TypeWordStack {
     void init(){
       selected=-1;
       lastLine=ntw=nOffset=0;      
+      ds.clear();
     }
     void paste(TypeWord tw){
       if(tw.type.i != NOOP){
         int n=twfind(selected);
         ds.paste(tw.type,n);
-        if(tw.type.i == CMDPUSH){
+        if(tw.type.i == CMDPUSH || tw.type.i == CMDFPUSH){
           ds.paste(tw.value,n+1);
         }
         ntw++;
@@ -538,7 +793,7 @@ class TypeWordStack {
           n=twfind(selected);
         }
         tw.type = ds.cut(n);
-        if(tw.type.i == CMDPUSH){
+        if(tw.type.i == CMDPUSH || tw.type.i == CMDFPUSH){
           tw.value = ds.cut(n);
         }
         ntw--;
@@ -558,7 +813,7 @@ class TypeWordStack {
       TypeWord tw;
       int nt=twfind(n);
       tw.type = ds.copy(nt);
-      if(tw.type.i == CMDPUSH){
+      if(tw.type.i == CMDPUSH || tw.type.i == CMDFPUSH){
         tw.value = ds.copy(nt+1);
       }
       else {
@@ -570,7 +825,7 @@ class TypeWordStack {
       TypeWord tw;
       int n=twfind(selected);
       tw.type = ds.copy(n);
-      if(tw.type.i == CMDPUSH){
+      if(tw.type.i == CMDPUSH || tw.type.i == CMDFPUSH){
         tw.value = ds.copy(n+1);
       }
       return tw;
@@ -583,7 +838,7 @@ class TypeWordStack {
     }
     void push(TypeWord tw){
       ds.push(tw.type);
-      if(tw.type.i == CMDPUSH){
+      if(tw.type.i == CMDPUSH || tw.type.i == CMDFPUSH){
         ds.push(tw.value);
       }
       ntw++;
@@ -592,7 +847,7 @@ class TypeWordStack {
       TypeWord tw;
       int n=twfind(--ntw);
       tw.type = ds.copy(n);
-      if(tw.type.i == CMDPUSH){
+      if(tw.type.i == CMDPUSH || tw.type.i == CMDFPUSH){
         tw.value = ds.copy(n+1);
         ds.pop();
       }
@@ -622,7 +877,7 @@ class TypeWordStack {
       Word w;
       for(int s=0;s<selected;s++){
         w=ds.copy(inx);
-        if(w.i == CMDPUSH){
+        if(w.i == CMDPUSH || w.i == CMDFPUSH){
           inx++;
         }
         inx++;
@@ -669,6 +924,9 @@ class TypeWordStack {
         if(tw.type.i == CMDPUSH){
           size+=(lenInt(tw.value.i) + 1);
         }
+        else if(tw.type.i == CMDFPUSH){
+          size += 10;
+        }
         else {
           size+=(lenBase40(tw.type.u) + 1);
         }
@@ -687,6 +945,9 @@ class TypeWordStack {
         TypeWord tw=get(nxt);
         if(tw.type.i == CMDPUSH){
           size+=(lenInt(tw.value.i) + 1);
+        }
+        else if(tw.type.i == CMDFPUSH){
+          size += 10;
         }
         else {
           size+=(lenBase40(tw.type.u) + 1);
@@ -796,6 +1057,11 @@ class TypeWordStack {
                 tw.value.i=toBase10(ascii);
                 push(tw);                                
               }
+              else if(isFloat(ascii)){
+                tw.type.i=CMDFPUSH;
+                tw.value.f=toFloat(ascii);
+                push(tw);                                
+              }
             }
             else {
               ascii[i++]=chr;
@@ -812,6 +1078,11 @@ class TypeWordStack {
           else if(isBase10(ascii)){
             tw.type.i=CMDPUSH;
             tw.value.i=toBase10(ascii);
+            push(tw);                                
+          }
+          else if(isFloat(ascii)){
+            tw.type.i=CMDFPUSH;
+            tw.value.f=toFloat(ascii);
             push(tw);                                
           }
         }
@@ -840,9 +1111,16 @@ class TypeWordStack {
         // Loop through programStack.ds (0 to nsw)
         for(int k=0;k<ntw;k++){
           TypeWord tw=get(k);
-          // This gets an error
+          // 
           if(tw.type.i == CMDPUSH){
             sprintf(ascii,"%d ",tw.value.i);
+            Serial.println(ascii);
+            for(int i=0;i<strlen(ascii);i++){
+              writeFile.write((unsigned char)ascii[i]);
+            }
+          }
+          else if(tw.type.i == CMDFPUSH){
+            sprintf(ascii,"%14.7 ",tw.value.f);
             Serial.println(ascii);
             for(int i=0;i<strlen(ascii);i++){
               writeFile.write((unsigned char)ascii[i]);
@@ -885,6 +1163,9 @@ class TypeWordStack {
           if(tw.type.i == CMDPUSH){
             size=lenInt(tw.value.i);
           }
+          else if(tw.type.i == CMDFPUSH){
+            size=10;
+          }
           else {
             size=lenBase40(tw.type.u);
           }
@@ -909,6 +1190,9 @@ class TypeWordStack {
               GO.lcd.setCharCursor(column, screenLine);
               if(tw.type.i == CMDPUSH){
                 GO.lcd.printf("%d",tw.value.i);
+              }
+              else if(tw.type.i == CMDFPUSH){
+                GO.lcd.printf("%10.5e",tw.value.f);
               }
               else {
                 fromBase40(ascii,tw.type.u);
@@ -988,10 +1272,12 @@ class HashLookup {
         }        
       }
     }
+#if KEEPHASH
     uint32_t computeHash(uint32_t x){
       uint32_t y=x^(x>>8);
       return 0xFF&(y^(y>>16));
     }
+#endif
     const char *getHelpMessage(GFU fname){
       char xyz[13];
       fromBase40(xyz,fname);
@@ -1012,6 +1298,7 @@ class HashLookup {
       }
     }
     void addEntry(void (*fptr)(), GFU fname, const char *msg){
+      // Define Help message
       for(int i=0;i<HASHHELPSIZE;i++){
         if(helpLookup[i].cmd == fname || helpLookup[i].cmd == 0){
           helpLookup[i].cmd=fname;
@@ -1019,6 +1306,8 @@ class HashLookup {
           break;
         }
       }
+#if KEEPHASH
+      // Hash portion
       int i=(int)computeHash(fname);
       if(table[i].original == 0){
         table[i].original=fname;
@@ -1026,6 +1315,8 @@ class HashLookup {
         table[i].fptr=fptr;
       }
       else {
+#endif
+        // Btree portion
         // Put these in sorted order, largest to smallest (0)
         for(int i=HASHSIZE;i<HASHSIZE+HASHOVERFLOW;i++){
           if(fname > table[i].original){
@@ -1039,9 +1330,13 @@ class HashLookup {
             return;
           }
         }
+#if KEEPHASH
       }
+#endif
     }
     void addDefinedEntry(int selected, GFU fname){
+#if KEEPHASH
+      // Hash portion, same as above
       int i=(int)computeHash(fname);
       // Allow overwriting
       if(table[i].original == 0 || table[i].original == fname){
@@ -1050,6 +1345,8 @@ class HashLookup {
         table[i].defined=selected;
       }
       else {
+#endif
+        // Btree portion
         // Put these in sorted order, largest to smallest (0)
         // This will allow overwriting native words
         for(int i=HASHSIZE;i<HASHSIZE+HASHOVERFLOW;i++){
@@ -1068,7 +1365,9 @@ class HashLookup {
             return;
           }
         }
+#if KEEPHASH
       }
+#endif
     }
     GFU getNextEntry(GFU e){
       // In terms of HASHSIZE and HASHOVERFLOW
@@ -1094,6 +1393,8 @@ class HashLookup {
       return 0;
     }
     int callEntry(GFU fname){
+#if KEEPHASH
+      // Hash portion
       GFU i=computeHash(fname);
       if(table[i].original == fname){
         if(table[i].fptr != NULL){
@@ -1110,6 +1411,7 @@ class HashLookup {
         return TRUE;
       }
       else {
+#endif
 // Want to replace this with a binary search - which means they have to be in order
         int i=HASHSIZE;
 #if DEBUG
@@ -1141,11 +1443,14 @@ class HashLookup {
             i^=bt;
           }
         }
+#if KEEPHASH
       }
+#endif
       return FALSE;
     }
 #if DEBUG
     void dump(){
+#if KEEPHASH
       for(int i=0;i<HASHSIZE;i++){
         if(table[i].original){
           char xyz[7];
@@ -1158,6 +1463,7 @@ class HashLookup {
         }
       }
       Serial.println("-----------------------------------");
+#endif
       for(int i=0;i<HASHOVERFLOW;i++){
         if(table[HASHSIZE+i].original){
           Serial.print(HASHSIZE+i);
@@ -1274,7 +1580,7 @@ class NameStack {
       nMenu=0;
       GFU cmd=0;
       while((cmd=CmdLookup.getNextEntry(cmd)) != 0){
-        // Only show valid Base40 strings (not CMDPUSH)
+        // Only show valid Base40 strings (not CMDPUSH or CMDFPUSH)
         if(cmd < 4096000000){
           push(cmd);
         }
@@ -1352,8 +1658,10 @@ class NameStack {
       return;
     }
 } menuStack;
-
+#if FLOATING
+#else
 int32_t accumulator,increment;
+#endif
 int32_t cmdIndex=1;
 
 
@@ -1414,8 +1722,12 @@ void kpWait(uint32_t ln){
 }
 #endif
 void resetEvent(){
+#if FLOATING
+  accumulator.init();
+#else
   increment=1;
   accumulator=0;
+#endif
 }
 void initKeypress(){
   tk=pk=0;
@@ -1423,7 +1735,8 @@ void initKeypress(){
   Base40Buffer.type.u=0;
   Base40Buffer.value.u=0;
 }
-
+#if FLOATING
+#else
 void showAccumulator(int InputState){
 #define ATCOLUMN 7
   int size=11;
@@ -1464,14 +1777,7 @@ void showAccumulator(int InputState){
     accu/=10;
   }
 }
-uint32_t i40(int i){
-  uint32_t v=1;
-  while(i){
-    v*=40L;
-    i--;
-  }
-  return v;
-}
+#endif
 void showBase40(){
   uint32_t b4b=Base40Buffer.type.u;
   int size=lengthBase40(b4b);
@@ -1484,24 +1790,17 @@ void showBase40(){
     b4b/=BASE;
   }
 }
-
-void pushBase40(int i){
-  uint32_t power;
-  power=0;
-  while(i40(power) <= accumulator){
-    power++;
-  }
-  accumulator+=(uint32_t)i*i40(power);
+void cmdFToInt(){
+  Word a,b;
+  a=dataStack.pop();
+  b.i=(GFI)a.f;
+  dataStack.push(b);
 }
-void popBase40(){
-  uint32_t power;
-
-  power=0;
-  while(accumulator/i40(power) > 40L){
-    power++;
-  }
-  power=(power>5)?5:power;
-  accumulator=accumulator%i40(power);
+void cmdIntToF(){
+  Word a,b;
+  a=dataStack.pop();
+  b.f=(GFF)a.i;
+  dataStack.push(b);
 }
 void cmdPlus(){
   Word a,b,c;
@@ -1513,6 +1812,17 @@ void cmdPlus(){
   j=b.i;
   k=j+i;
   c.i=k;
+  dataStack.push(c);
+}
+void cmdFPlus(){
+  Word a,b,c;
+  GFF x,y,z;
+  a=dataStack.pop();
+  x=a.f;
+  b=dataStack.pop();
+  y=b.f;
+  z=x+y;
+  c.f=z;
   dataStack.push(c);
 }
 void cmdMinus(){
@@ -1527,6 +1837,17 @@ void cmdMinus(){
   c.i=k;
   dataStack.push(c);
 }
+void cmdFMinus(){
+  Word a,b,c;
+  GFF x,y,z;
+  a=dataStack.pop();
+  x=a.f;
+  b=dataStack.pop();
+  y=b.f;
+  z=y-x;
+  c.f=z;
+  dataStack.push(c);
+}
 void cmdTimes(){
   Word a,b,c;
   GFI i,j,k;
@@ -1539,6 +1860,18 @@ void cmdTimes(){
   c.i=k;
   dataStack.push(c);
 }
+void cmdFTimes(){
+  Word a,b,c;
+  GFF x,y,z;
+  
+  a=dataStack.pop();
+  x=a.f;
+  b=dataStack.pop();
+  y=b.f;
+  z=y*x;
+  c.f=z;
+  dataStack.push(c);
+}
 void cmdDivide(){
   Word a,b,c;
   GFI i,j,k;
@@ -1549,6 +1882,18 @@ void cmdDivide(){
   j=b.i;
   k=j/i;
   c.i=k;
+  dataStack.push(c);
+}
+void cmdFDivide(){
+  Word a,b,c;
+  GFF x,y,z;
+  
+  a=dataStack.pop();
+  x=a.f;
+  b=dataStack.pop();
+  y=b.f;
+  z=y/x;
+  c.f=z;
   dataStack.push(c);
 }
 void cmdPower(){
@@ -1744,6 +2089,12 @@ void cmdEmitn(){
   GO.lcd.printf("%d",a.i);
   GO.update();
 }
+void cmdFEmit(){
+  Word a;
+  a=dataStack.pop();
+  GO.lcd.printf("%10.5e",a.f);
+  GO.update();
+}
 #if WAIT
 void cmdWait(){
   Word a;
@@ -1919,6 +2270,9 @@ void cmdQuote(){
   if(programStack.get(programStack.getSelected()).type.i == CMDPUSH){
     globalError(ERRORQUOTENUMBER);
   }
+  else if(programStack.get(programStack.getSelected()).type.i == CMDFPUSH){
+    globalError(ERRORQUOTENUMBER);
+  }
   else {
     dataStack.push(programStack.copy().type);    
   }
@@ -2013,11 +2367,18 @@ void cmdDump(){
 #endif
 void commandInit(){
   CmdLookup.addEntry(&cmdPush, CMDPUSH, "(- value)");
+  CmdLookup.addEntry(&cmdPush, CMDFPUSH, "(- value)");
   CmdLookup.addEntry(&cmdBreakOut, toBase40(":"), "(-)");
-  CmdLookup.addEntry(&cmdPlus, toBase40("+"),     "(r1 r2 - sum)");
-  CmdLookup.addEntry(&cmdMinus, toBase40("-"),    "(r1 r2 - difference)");
-  CmdLookup.addEntry(&cmdTimes, toBase40("*"),    "(r1 r2 - product)");
-  CmdLookup.addEntry(&cmdDivide, toBase40("/"),   "(dividend divisor - result)");
+  CmdLookup.addEntry(&cmdPlus, toBase40("+"),     "(int int - sum)");
+  CmdLookup.addEntry(&cmdFPlus, toBase40(".+"),     "(float float - sum)");
+  CmdLookup.addEntry(&cmdMinus, toBase40("-"),    "(int int - difference)");
+  CmdLookup.addEntry(&cmdFMinus, toBase40(".-"),    "(float float - difference)");
+  CmdLookup.addEntry(&cmdTimes, toBase40("*"),    "(int int - product)");
+  CmdLookup.addEntry(&cmdFTimes, toBase40(".*"),    "(float float - product)");
+  CmdLookup.addEntry(&cmdDivide, toBase40("/"),   "(dividend divisor - quotient)");
+  CmdLookup.addEntry(&cmdFDivide, toBase40("./"),   "(float float - quotient)");
+  CmdLookup.addEntry(&cmdFToInt, toBase40(".TOINT"),   "(float - int)");
+  CmdLookup.addEntry(&cmdIntToF, toBase40("INTTO."),   "(int - float)");
   CmdLookup.addEntry(&cmdPower, toBase40("**"),   "(base exponent - result)");
   CmdLookup.addEntry(&cmdShiftLeft, toBase40("<<"),   "(number bits - result)");
   CmdLookup.addEntry(&cmdShiftRight, toBase40(">>"),   "(number bits - result)");
@@ -2087,9 +2448,10 @@ void commandInit(){
   CmdLookup.addEntry(&cmdRctngl, toBase40("RCTNGL"), "(x y wt ht color -)");
   CmdLookup.addEntry(&cmdCircle, toBase40("CIRCLE"), "(x y radius color -)");
   CmdLookup.addEntry(&cmdCup, toBase40("CUP"),       "(row column -)");
-  CmdLookup.addEntry(&cmdEmit, toBase40("EMIT"), "(r1 -)");
+  CmdLookup.addEntry(&cmdEmit, toBase40("EMIT"), "(Base40 -)");
   CmdLookup.addEntry(&cmdButton, toBase40("BUTTON"), "(- value)");
-  CmdLookup.addEntry(&cmdEmitn, toBase40("."), "(r1 -)");
+  CmdLookup.addEntry(&cmdEmitn, toBase40("."), "(int -)");
+  CmdLookup.addEntry(&cmdFEmit, toBase40(".."), "(float -)");
 #if DEBUG
   CmdLookup.addEntry(&cmdDump, toBase40("DUMP"), "(-)");
 #endif
@@ -2116,7 +2478,7 @@ int programScan(){
     else if(tw.type.u == toBase40("QUOTE")){
       lastQuote=true;
     }
-    else if(lastQuote == true && tw.type.i == CMDPUSH){
+    else if(lastQuote == true && (tw.type.i == CMDPUSH || tw.type.i == CMDFPUSH)){
       globalError(ERRORQUOTENUMBER);
       return true;
     }
@@ -2287,7 +2649,11 @@ void showState(int InputState, int PreviousInputState){
   programStack.show(InputState,limitLine);
   showAlphaNumeric(InputState);
   GO.update();
+#if FLOATING
+  accumulator.show(InputState);
+#else
   showAccumulator(InputState);
+#endif
   GO.update();
   menuStack.show(InputState);
   GO.update();
@@ -2296,9 +2662,13 @@ void showState(int InputState, int PreviousInputState){
 /* Switching to expect one keypress at a time */
 void processEvent(uint16_t pkk, uint16_t tkk){
   int i;
-  if(increment < 1){
-    increment=1;
+#if FLOATING
+  accumulator.minimums();
+#else
+  if(increment.i < 1){
+    increment.i=1;
   }
+#endif
   PreviousInputState=InputState;
   if(pkk == KPA){
     switch(tkk){
@@ -2372,22 +2742,53 @@ void processEvent(uint16_t pkk, uint16_t tkk){
   else if(InputState == INPUTSTATENUMERIC){
       switch(tkk){
         case KPLEFT:
-          increment=(increment >= 1000000000)?increment:increment*10;
+#if FLOATING
+          accumulator.shiftLeft();
+#else 
+          increment.i=(increment.i >= 1000000000)?increment.i:increment.i*10;
+#endif
           break;
         case KPRIGHT:
-          increment=(increment == 1)?1:increment/10;
+#if FLOATING
+          accumulator.shiftRight();
+#else
+          increment.i=(increment.i == 1)?1:increment.i/10;
+#endif
           break;
         case KPUP:
-          accumulator+=increment;
+#if FLOATING
+          accumulator.incr();
+#else
+          accumulator.i+=increment.i;
+#endif
           break;
         case KPDOWN:
-          accumulator-=increment;
+#if FLOATING
+          accumulator.decr();
+#else
+          accumulator.i-=increment.i;
+#endif
           break;
         case KPB:
           TypeWord tw;
+          
+#if FLOATING
+          if(accumulator.isFloating()){
+            tw.type.i=CMDFPUSH;
+          }
+          else {
+            tw.type.i=CMDPUSH;
+          }
+          tw.value=accumulator.get();
+#else
           tw.type.i=CMDPUSH;
-          tw.value.i=accumulator;
+          tw.value.i=accumulator.i;
+#endif
           programStack.paste(tw);
+          break;
+        case KPB|KPA:
+          accumulator.init();
+          break;
       }
   }
   else if(InputState == INPUTSTATECLEAR){

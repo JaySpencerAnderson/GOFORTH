@@ -1,4 +1,4 @@
-Word List
+>Predefined Word List
 + "AGAIN"
   - usage: (-)
   - action: unconditionally restarts at matching BEGIN
@@ -63,6 +63,9 @@ Word List
   - usage: (r1 -)
   - action: execute the next word if the top of stack is non-zero, jump to word after ELSE otherwise or jump to THEN if there is no ELSE
   - related: ELSE, THEN
++ "INTTO."
+  - usage (int - float)
+  - action: Take the integer value on the top of stack, convert it to floating point and place this value on the stack.
 + "LOOP"
   - usage: (-)
   - action: increment index variable in DO LOOP loop, jump to word after prior DO if the limit has not yet been reached
@@ -230,7 +233,29 @@ Word List
 + "."
   - usage: (r1 -)
   - action: prints the top of stack as a signed integer
-  - related: CUP
+  - related: CUP, ..
+
++ In general, words that begin with . (other than ".") are functions that take float values as operands.  Most of these (other than ".TOINT") place a float result back on the stack.
+
++ ".TOINT"
+  - usage: (float - int)
+  - action: Take the floating point value on the top of stack, convert it to integer and place this value on the stack.
++ ".+"
+  - usage: (float float - sum)
+  - action: Take the top two float values on the top of stack, sum them and put the result on the stack.
++ ".-"
+  - usage: (float float - difference)
+  - action: Take the top two float values on the top of stack, subtract the top value from the second and put the result on the stack.
++ ".*"
+  - usage: (float float - product)
+  - action: Take the top two float values on the top of stack, multiply the top value by the second and put the result on the stack.
++ "./"
+  - usage: (float float - quotient)
+  - action: Take the top two float values on the top of stack, divide the second value by the top value and put the result on the stack.
++ ".."
+  - usage: (float -)
+  - action: prints the top of stack as a floating point number.
+  - related: CUP, .
 + "<"
   - usage: (r1 r2 - less?)
   - action: push -1 on the stack if the penultimate value on the stack is less than the top of stack, 0 otherwise.
@@ -264,7 +289,57 @@ Word List
   - action: r1 is shifted right r2 number of bits
   - related: +, -, /, MOD, ^, &, |, <<, **
 
-+ "CMDPUSH"
++ CMDFPUSH
   - usage: (value)
-  - action: pushes a number on the stack.  there is no separate word for this.  entering a number implies this word.  So for instance 1 2 + first pushes 1 on the stack, then pushes 2 on the stack, then adds those two (removing them from the stack) and finally pushes the result (3) on the stack.
+  - action: pushes a floating point number on the stack.  there is no separate word for this.  entering a floating point number implies this word.  So for instance if you have a program that reads "1.20000e+0 2.40000e+0 .+", the program (internally) will consist of 
+   1) CMDFPUSH
+   2) the floating point representation of 1.2
+   3) CMDFPUSH
+   4) the floating point representation of 2.4
+   5) ".+" encoded as a Base 40 character string
+
+  - related: CMDPUSH
+
++ CMDPUSH
+  - usage: (value)
+  - action: pushes an integer on the stack.  there is no separate word for this.  entering an integer implies this word.  So for instance 1 2 + first pushes 1 on the stack, then pushes 2 on the stack, then adds those two (removing them from the stack) and finally pushes the result (3) on the stack.
   - related: 
+
+-------------------------------------------------
+>Internals
+
+GO Forth consists of a program stack where the program is stored and a data stack where data may be stored.
+
+A command on the program stack is the Base 40 representation of the word shown above.  The Base 40 representation is always 32 bits.  This effectively limits a Base 40 string to a maximum of 6 characters since 40 to the 6th power is 4096000000. So for instance 
+- the Base 40 representation of "A" would be 1, 
+- the Base 40 representation of "B" would be 2, 
+- the Base 40 representation of "AA" would be 41, 
+- the Base 40 representation of "BB" would be 82 and 
+- the Base 40 representation of "ABC" would be 1683 or 1 (A) times 40 squared plus 2 (B) times 40 plus 3 (C).  
+
+You can see a list of the Base 40 characters with numeric values by going into alpha mode by holding down the "A" button and pressing the left arrow.  There are only 39 characters shown since 0 is equivalent to blank and blank is not allowed as part of a word.  The last character shown (which is a back arrow) is actually a delete key.
+
+There are two exceptions where a command is not a Base 40 string: CMSFPUSH and CMDPUSH.  Both of these are used to precede another 32 bit word to be loaded on the data stack, which is either a floating point number (in the case of CMDFPUSH) or integer (in the case of CMDPUSH).  The value for CMDFPUSH is -2 or 0xFFFFFFFE and the value for CMDPUSH is -1 or 0xFFFFFFFF.
+
+For example, if you enter the following program "40 2 +", the numeric internal representation would be
+
+Address|Hex Value|Meaning|Data Stack Contents
+-------|---------|---|---
+01|0xFFFFFFFF|CMDPUSH|
+02|0x00000028|40|40
+03|0XFFFFFFFF|CMDPUSH
+04|0x00000002|2|40, 2
+05|0x0000001D|+|42
+
+This sort of trick allows the program to mix data and program words in the same array without any embedded type bits.  I think of this as being analogous to a LDI (or load immediate) assembly language instruction - where the data follows the instruction.
+
+Note that in these two cases, neither instruction appears.  The data does appear and the 32 bits will be interpreted for the purposes of display as a floating point number if preceded by CMDFPUSH and as an integer if preceded by CMDPUSH.
+
+There is one other instruction that loads data onto the data stack.  That instruction is "QUOTE".  The difference in this case is that we see the instruction. 
+
+For example, if you enter the program "10 10 CUP QUOTE ABCDEF EMIT 5000 DELAY", the following will happen:
+- "10 10 CUP" will place the cursor position at row 10, column 10.
+- "QUOTE ABCDEF" will place the 32 bit representation of the Base 40 string "ABCDEF" on the data stack.
+- "EMIT" will print the top of stack, interpreted as a Base 40 encoded string at the current cursor position [10,10].
+- "5000 DELAY" will delay for 5000 milliseconds, during which time you will be able to view "ABCDEF" shown at [10,10].
+- At the end of the delay, GO Forth will refresh the display of the program and the current contents of the data stack.  This will erase the displayed string ("ABCDEF").
