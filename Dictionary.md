@@ -308,7 +308,7 @@
 -------------------------------------------------
 >Internals
 
-GO Forth consists of a program stack where the program is stored and a data stack where data may be stored.
+GO Forth contains a program stack where the program is stored and a data stack where data may be stored.
 
 A command on the program stack is the Base 40 representation of the word shown above.  The Base 40 representation is always 32 bits.  This effectively limits a Base 40 string to a maximum of 6 characters since 40 to the 6th power is 4096000000. So for instance 
 - the Base 40 representation of "A" would be 1, 
@@ -319,7 +319,7 @@ A command on the program stack is the Base 40 representation of the word shown a
 
 You can see a list of the Base 40 characters with numeric values by going into alpha mode by holding down the "A" button and pressing the left arrow.  There are only 39 characters shown since 0 is equivalent to blank and blank is not allowed as part of a word.  The last character shown (which is a back arrow) is actually a delete key.
 
-There are two exceptions where a command is not a Base 40 string: CMSFPUSH and CMDPUSH.  Both of these are used to precede another 32 bit word to be loaded on the data stack, which is either a floating point number (in the case of CMDFPUSH) or integer (in the case of CMDPUSH).  The value for CMDFPUSH is -2 or 0xFFFFFFFE and the value for CMDPUSH is -1 or 0xFFFFFFFF.
+There are two exceptions where a command is not a Base 40 string: CMDFPUSH and CMDPUSH.  Both of these are used to precede another 32 bit word to be loaded on the data stack, which is either a floating point number (in the case of CMDFPUSH) or integer (in the case of CMDPUSH).  The value for CMDFPUSH is -2 or 0xFFFFFFFE and the value for CMDPUSH is -1 or 0xFFFFFFFF.
 
 For example, if you enter the following program "40 2 +", the numeric internal representation would be
 
