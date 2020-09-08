@@ -16,6 +16,7 @@
 // 3) No straight forward (without changing structure of stack) method of showing floats in stack
 // 4) Floating point methods - DONE
 // 4a) Conversion methods - DONE
+// 4b) Comparison methods
 // 5) ReadFile, WriteFile - DONE
 // Bugs: after entering float, increment gets set to 0 or -1 - NOT SEEN
 //       I noticed it reboot after doing A-B in numeric and other stuff. - NOT SEEN
@@ -1978,6 +1979,13 @@ void cmdLt(){
   c.u=(b.i < a.i)?TRUE:FALSE;
   dataStack.push(c);
 }
+void cmdFLt(){ 
+  Word a,b,c;
+  a=dataStack.pop();
+  b=dataStack.pop();
+  c.u=(b.f < a.f)?TRUE:FALSE;
+  dataStack.push(c);
+}
 void cmdEqual(){
   Word a,b,c;
   a=dataStack.pop();
@@ -1992,11 +2000,25 @@ void cmdGt(){
   c.u=(b.i > a.i)?TRUE:FALSE;
   dataStack.push(c);
 }
+void cmdFGt(){
+  Word a,b,c;
+  a=dataStack.pop();
+  b=dataStack.pop();
+  c.u=(b.f > a.f)?TRUE:FALSE;
+  dataStack.push(c);
+}
 void cmdLtEqual(){ 
   Word a,b,c;
   a=dataStack.pop();
   b=dataStack.pop();
   c.u=(b.i <= a.i)?TRUE:FALSE;
+  dataStack.push(c);
+}
+void cmdFLtEqual(){ 
+  Word a,b,c;
+  a=dataStack.pop();
+  b=dataStack.pop();
+  c.u=(b.f <= a.f)?TRUE:FALSE;
   dataStack.push(c);
 }
 void cmdNotEqual(){
@@ -2011,6 +2033,13 @@ void cmdGtEqual(){
   a=dataStack.pop();
   b=dataStack.pop();
   c.u=(b.i >= a.i)?TRUE:FALSE;
+  dataStack.push(c);
+}
+void cmdFGtEqual(){
+  Word a,b,c;
+  a=dataStack.pop();
+  b=dataStack.pop();
+  c.u=(b.f >= a.f)?TRUE:FALSE;
   dataStack.push(c);
 }
 void cmdPut32(){
@@ -2385,12 +2414,16 @@ void commandInit(){
   CmdLookup.addEntry(&cmdAnd, toBase40("&"),      "(r1 r2 - and)");
   CmdLookup.addEntry(&cmdOr, toBase40("|"),       "(r1 r2 - or)");
   CmdLookup.addEntry(&cmdXor, toBase40("^"),    "(r1 r2 - xor)");
-  CmdLookup.addEntry(&cmdLt, toBase40("<"),       "(r1 r2 - less?)");
+  CmdLookup.addEntry(&cmdLt, toBase40("<"),       "(int int - less?)");
+  CmdLookup.addEntry(&cmdFLt, toBase40(".<"),       "(float float - less?)");
   CmdLookup.addEntry(&cmdEqual, toBase40("="),    "(r1 r2 - equal?)");
-  CmdLookup.addEntry(&cmdGt, toBase40(">"),       "(r1 r2 - greater)");
-  CmdLookup.addEntry(&cmdLtEqual, toBase40("<="),       "(r1 r2 - lessOrEqual?)");
+  CmdLookup.addEntry(&cmdGt, toBase40(">"),       "(int int - greater)");
+  CmdLookup.addEntry(&cmdFGt, toBase40(".>"),       "(float float - greater)");
+  CmdLookup.addEntry(&cmdLtEqual, toBase40("<="),       "(int int - lessOrEqual?)");
+  CmdLookup.addEntry(&cmdFLtEqual, toBase40(".<="),       "(float float - lessOrEqual?)");
   CmdLookup.addEntry(&cmdNotEqual, toBase40("<>"),    "(r1 r2 - notEqual?)");
-  CmdLookup.addEntry(&cmdGtEqual, toBase40(">="),       "(r1 r2 - greaterOrEqual)");
+  CmdLookup.addEntry(&cmdGtEqual, toBase40(">="),       "(int int - greaterOrEqual)");
+  CmdLookup.addEntry(&cmdFGtEqual, toBase40(".>="),       "(float float - greaterOrEqual)");
   CmdLookup.addEntry(&cmdDac, toBase40("DAC"),    "(r1 -)");
   CmdLookup.addEntry(&cmdGet8, toBase40("GETBYT"),"(r1 - value)");
   CmdLookup.addEntry(&cmdPut8, toBase40("PUTBYT"),"(r1 r2 -)");
